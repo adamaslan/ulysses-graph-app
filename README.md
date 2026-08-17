@@ -1,4 +1,6 @@
-# React + Vite
+# Ulysses Graph App
+
+An interactive force-directed graph of James Joyce's *Ulysses* — episodes, characters, themes, and places, built with React, D3, and Vite.
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
