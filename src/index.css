@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    CYBERPUNK LAYER — see STYLE-GUIDE.md for the full token contract.

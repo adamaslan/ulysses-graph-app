@@ -30,21 +30,36 @@ function buildAdjacency(edges) {
   return adjacency;
 }
 
-export default function UlyssesGraph({ filterType, highlightId }) {
+export default function UlyssesGraph({ filterType }) {
   const svgRef       = useRef(null);
   const nodeGroupRef = useRef(null);
   const linkRef      = useRef(null);
   const simRef       = useRef(null);
   const adjacencyRef = useRef(new Map());
+  const nodesRef      = useRef([]);
   const [selected, setSelected] = useState(null);
   const [neighbors, setNeighbors] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
 
+  // A filtered category keeps its own nodes plus every node one edge away, so
+  // cross-type relationships (e.g. an episode's characters) stay connected
+  // instead of being stranded as isolated dots.
+  const categoryIds = filterType
+    ? new Set(NODES.filter(n => n.type === filterType).map(n => n.id))
+    : null;
+
+  const visibleIds = categoryIds
+    ? new Set([
+        ...categoryIds,
+        ...EDGES.filter(e => categoryIds.has(e.source) || categoryIds.has(e.target))
+          .flatMap(e => [e.source, e.target]),
+      ])
+    : new Set(NODES.map(n => n.id));
+
   const filteredNodes = filterType
-    ? NODES.filter(n => n.type === filterType || n.id === highlightId)
+    ? NODES.filter(n => visibleIds.has(n.id))
     : NODES;
 
-  const visibleIds = new Set(filteredNodes.map(n => n.id));
   const filteredEdges = EDGES.filter(
     e => visibleIds.has(e.source) && visibleIds.has(e.target)
   );
@@ -83,11 +98,8 @@ export default function UlyssesGraph({ filterType, highlightId }) {
       d.id === focusId || linked.has(d.id) ? 1 : DIM_OPACITY
     );
 
-    nodeGroup.select('circle')
-      .attr('stroke', d => {
-        if (d.id === focusId) return '#ffffff';
-        return linked.has(d.id) ? TYPE_COLORS[d.type] : TYPE_COLORS[d.type];
-      })
+    nodeGroup.select('.node-body')
+      .attr('stroke', d => (d.id === focusId ? '#ffffff' : TYPE_COLORS[d.type]))
       .attr('stroke-width', d => {
         if (d.id === focusId) return 3;
         return linked.has(d.id) ? 2.5 : 1.5;
@@ -125,7 +137,7 @@ export default function UlyssesGraph({ filterType, highlightId }) {
       .classed('edge-flow', false);
 
     nodeGroup.attr('opacity', 1);
-    nodeGroup.select('circle')
+    nodeGroup.select('.node-body')
       .attr('stroke', d => TYPE_COLORS[d.type])
       .attr('stroke-width', 1.5)
       .attr('fill', d => TYPE_COLORS[d.type] + '18')
@@ -185,6 +197,7 @@ export default function UlyssesGraph({ filterType, highlightId }) {
     const nodes = filteredNodes.map(d => ({ ...d }));
     const edges = filteredEdges.map(d => ({ ...d }));
     adjacencyRef.current = buildAdjacency(filteredEdges);
+    nodesRef.current = nodes;
 
     // Radius by type
     const radius = d => d.type === 'episode' ? 12 : d.type === 'character' ? 10 : 8;
@@ -210,6 +223,9 @@ export default function UlyssesGraph({ filterType, highlightId }) {
       .data(nodes)
       .join('g')
       .attr('cursor', 'pointer')
+      .attr('tabindex', 0)
+      .attr('role', 'button')
+      .attr('aria-label', d => `${TYPE_LABELS[d.type]}: ${d.label}`)
       .call(d3.drag()
         .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
         .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
@@ -227,6 +243,7 @@ export default function UlyssesGraph({ filterType, highlightId }) {
       .attr('pointer-events', 'none');
 
     nodeGroup.append('circle')
+      .attr('class', 'node-body')
       .attr('r', radius)
       .attr('fill', d => TYPE_COLORS[d.type] + '18')
       .attr('stroke', d => TYPE_COLORS[d.type])
@@ -242,28 +259,27 @@ export default function UlyssesGraph({ filterType, highlightId }) {
       .attr('fill', d => TYPE_COLORS[d.type])
       .attr('pointer-events', 'none');
 
+    // Toggle selection on a node; used by both pointer and keyboard activation.
+    // The updater stays pure (no D3 mutation inside it) — the effect below
+    // reacts to `selected` and does the actual graph painting.
+    const selectNode = d => {
+      setSelected(prev => (prev?.id === d.id ? null : d));
+    };
+
     nodeGroup.on('click', (e, d) => {
       e.stopPropagation();
-      setSelected(prev => {
-        if (prev?.id === d.id) {
-          clearSelection();
-          setNeighbors([]);
-          return null;
-        }
-        applySelection(d);
-        setNeighbors(
-          nodes.filter(n => n.id !== d.id && adjacencyRef.current.get(d.id)?.has(n.id))
-        );
-        return d;
-      });
+      selectNode(d);
     });
 
-    svg.on('click', () => {
-      setSelected(prev => {
-        if (prev) { clearSelection(); setNeighbors([]); }
-        return null;
-      });
+    nodeGroup.on('keydown', (e, d) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        selectNode(d);
+      }
     });
+
+    svg.on('click', () => setSelected(null));
 
     sim.on('tick', () => {
       link
@@ -275,12 +291,28 @@ export default function UlyssesGraph({ filterType, highlightId }) {
     return () => { sim.stop(); };
   }, [filterType, applySelection, clearSelection]);
 
+  // Paint the current selection. Runs as a side effect of `selected` changing
+  // (never inside the setSelected updater itself, which must stay pure).
+  useEffect(() => {
+    if (!selected) {
+      clearSelection();
+      setNeighbors([]);
+      return;
+    }
+    applySelection(selected);
+    setNeighbors(
+      nodesRef.current.filter(
+        n => n.id !== selected.id && adjacencyRef.current.get(selected.id)?.has(n.id)
+      )
+    );
+  }, [selected, applySelection, clearSelection]);
+
   // Search highlight
   useEffect(() => {
     if (!nodeGroupRef.current) return;
     const term = searchTerm.toLowerCase();
     const matches = d => !term || d.label.toLowerCase().includes(term);
-    nodeGroupRef.current.select('circle')
+    nodeGroupRef.current.select('.node-body')
       .attr('opacity', d => (matches(d) ? 1 : 0.15));
     nodeGroupRef.current.select('text')
       .attr('opacity', d => (matches(d) ? 1 : 0.1));
@@ -339,7 +371,7 @@ export default function UlyssesGraph({ filterType, highlightId }) {
 
           <button
             className="mt-3 text-[10px] font-mono uppercase tracking-widest text-white/30 hover:text-white/80 transition"
-            onClick={() => { clearSelection(); setNeighbors([]); setSelected(null); }}
+            onClick={() => setSelected(null)}
           >
             [ x ] close
           </button>
