@@ -1,0 +1,238 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CYBERPUNK LAYER — see STYLE-GUIDE.md for the full token contract.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --cy-void:    #05060a;
+  --cy-deep:    #0a0d14;
+  --cy-surface: #10141f;
+  --cy-cyan:    #00f0ff;
+  --cy-magenta: #ff2bd6;
+  --cy-yellow:  #ffd400;
+  --cy-green:   #39ff88;
+  --cy-line:    rgba(0, 240, 255, 0.18);
+}
+
+body {
+  background: var(--cy-void);
+}
+
+/* Graph canvas: radial vignette over near-black so neon reads hot. */
+.cyber-canvas {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(0, 240, 255, 0.07), transparent 60%),
+    radial-gradient(ellipse at 85% 100%, rgba(255, 43, 214, 0.07), transparent 55%),
+    var(--cy-void);
+}
+
+/* CRT scanlines — purely decorative, never intercepts clicks. */
+.scanlines {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.22) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+  mix-blend-mode: overlay;
+  opacity: 0.5;
+}
+
+/* Data flowing along the edges of the selected node. */
+.edge-flow {
+  animation: edge-dash 0.7s linear infinite;
+}
+
+@keyframes edge-dash {
+  to { stroke-dashoffset: -12; }
+}
+
+/* Halo ring around the focused node. */
+.node-halo {
+  animation: halo-pulse 1.8s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes halo-pulse {
+  0%, 100% { stroke-opacity: 0.7; transform: scale(1); }
+  50%      { stroke-opacity: 0.15; transform: scale(1.25); }
+}
+
+/* Dialogue box: clipped corner, neon rule, heavy blur. */
+.cyber-panel {
+  --accent: var(--cy-cyan);
+  background: linear-gradient(160deg, rgba(16, 20, 31, 0.95), rgba(5, 6, 10, 0.95));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-left: 2px solid var(--accent);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    0 0 24px color-mix(in srgb, var(--accent) 25%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  animation: panel-in 160ms ease-out;
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.glitch-title {
+  text-shadow:
+    0 0 8px color-mix(in srgb, var(--accent) 60%, transparent),
+    1px 0 0 rgba(255, 43, 214, 0.35),
+    -1px 0 0 rgba(0, 240, 255, 0.35);
+}
+
+/* Terminal-style input. */
+.cyber-input {
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--cy-cyan);
+  background: rgba(5, 6, 10, 0.85);
+  border: 1px solid var(--cy-line);
+  border-radius: 2px;
+  outline: none;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+
+.cyber-input::placeholder { color: rgba(0, 240, 255, 0.3); }
+
+.cyber-input:focus {
+  border-color: var(--cy-cyan);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.35);
+}
+
+/* Chip / filter button. */
+.cyber-chip {
+  font-family: ui-monospace, Consolas, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: 2px;
+  border: 1px solid;
+  transition: color 150ms, border-color 150ms, box-shadow 150ms, background-color 150ms;
+}
+
+.cyber-chip:hover {
+  box-shadow: 0 0 10px color-mix(in srgb, currentColor 40%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edge-flow, .node-halo, .cyber-panel { animation: none; }
+}
+
+:root {
+  --text: #9fb3c8;
+  --text-h: #e8f6ff;
+  --bg: #05060a;
+  --border: rgba(0, 240, 255, 0.18);
+  --code-bg: #f4f3ec;
+  --accent: #aa3bff;
+  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  --social-bg: rgba(244, 243, 236, 0.5);
+  --shadow:
+    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 18px/145% var(--sans);
+  letter-spacing: 0.18px;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #9ca3af;
+    --text-h: #f3f4f6;
+    --bg: #16171d;
+    --border: #2e303a;
+    --code-bg: #1f2028;
+    --accent: #c084fc;
+    --accent-bg: rgba(192, 132, 252, 0.15);
+    --accent-border: rgba(192, 132, 252, 0.5);
+    --social-bg: rgba(47, 48, 58, 0.5);
+    --shadow:
+      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+  }
+
+  #social .button-icon {
+    filter: invert(1) brightness(2);
+  }
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  text-align: left;
+}
+
+h1,
+h2 {
+  font-family: var(--heading);
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 56px;
+  letter-spacing: -1.68px;
+  margin: 32px 0;
+  @media (max-width: 1024px) {
+    font-size: 36px;
+    margin: 20px 0;
+  }
+}
+h2 {
+  font-size: 24px;
+  line-height: 118%;
+  letter-spacing: -0.24px;
+  margin: 0 0 8px;
+  @media (max-width: 1024px) {
+    font-size: 20px;
+  }
+}
+p {
+  margin: 0;
+}
+
+code,
+.counter {
+  font-family: var(--mono);
+  display: inline-flex;
+  border-radius: 4px;
+  color: var(--text-h);
+}
+
+code {
+  font-size: 15px;
+  line-height: 135%;
+  padding: 4px 8px;
+  background: var(--code-bg);
+}
