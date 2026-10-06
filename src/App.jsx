@@ -1,13 +1,28 @@
 import { useState } from 'react';
 import UlyssesGraph from './components/UlyssesGraph';
-import { NODES, TYPE_COLORS, TYPE_LABELS } from './data/graphData';
+import { NODES, EDGES, LAYERS, TYPE_COLORS, TYPE_LABELS } from './data/graphData';
 
 const COUNTS = NODES.reduce((acc, n) => {
   acc[n.type] = (acc[n.type] || 0) + 1;
   return acc;
 }, {});
 
-const FILTERS = [null, 'episode', 'character', 'theme', 'place'];
+const LEGEND_DESC = {
+  episode: 'Each chapter, June 16, 1904',
+  part: 'Telemachiad, Odyssey, Nostos',
+  character: 'Bloom and Stephen to the Citizen and Bello',
+  theme: '8 root themes, 36 sub-themes',
+  place: 'Martello Tower to Nighttown',
+  motif: 'Recurring images mined from the notes',
+  analysis: 'Pasted analyses and cross-cutting essays',
+  technique: 'The style each episode is written in',
+  correspondence: 'The Homeric figures',
+  schema: 'The Gilbert schema “art” of each episode',
+};
+
+const MOTIF_NOTE =
+  'Motifs are mined from the notes file. Episodes 6, 7, 9 and 10 have no captured Joyce passages, ' +
+  'so no motif reaches them. That reflects the notes, not the novel.';
 
 /** Filter pill styling — neon outline when active, ghosted cyan when not. */
 function chipStyle(active, type) {
@@ -17,25 +32,64 @@ function chipStyle(active, type) {
     : { borderColor: 'rgba(0,240,255,0.18)', color: 'rgba(0,240,255,0.45)', backgroundColor: 'transparent' };
 }
 
-export default function App() {
+function useGraphControls() {
+  const [layer, setLayer] = useState('core');
   const [filterType, setFilterType] = useState(null);
+  const [minWeight, setMinWeight] = useState(3);
+  const types = LAYERS.find(l => l.id === layer).types;
+  return {
+    layer, filterType, minWeight, types,
+    chooseLayer: id => { setLayer(id); setFilterType(null); },
+    setFilterType, setMinWeight,
+  };
+}
+
+function Controls({ controls, compact = false }) {
+  const { layer, filterType, minWeight, types, chooseLayer, setFilterType, setMinWeight } = controls;
+  const pill = 'cyber-chip text-[10px] px-3 py-1';
+  return (
+    <div className={`flex items-center gap-2 flex-wrap ${compact ? 'justify-center' : ''}`}>
+      {!compact && (
+        <span className="text-[10px] font-mono uppercase tracking-widest mr-1" style={{ color: 'rgba(0,240,255,0.35)' }}>
+          Layer:
+        </span>
+      )}
+      {LAYERS.map(l => (
+        <button key={l.id} onClick={() => chooseLayer(l.id)} className={pill}
+          style={{ ...chipStyle(layer === l.id, null), ...(compact ? { backgroundColor: '#05060acc' } : {}) }}>
+          {l.label}
+        </button>
+      ))}
+      <span className="mx-1 text-white/10">|</span>
+      {[null, ...types].map(f => (
+        <button key={f ?? 'all'} onClick={() => setFilterType(f)} className={pill}
+          style={{ ...chipStyle(filterType === f, f), ...(compact ? { backgroundColor: '#05060acc' } : {}) }}>
+          {f ? TYPE_LABELS[f] + 's' : 'All'}
+        </button>
+      ))}
+      <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider ml-2"
+        style={{ color: 'rgba(255,43,214,0.7)' }} title="Hide co-occurrence edges shared by fewer passages than this">
+        co-occurs ≥ {minWeight}
+        <input type="range" min="1" max="8" value={minWeight}
+          onChange={e => setMinWeight(Number(e.target.value))} className="w-24 accent-fuchsia-500" />
+      </label>
+    </div>
+  );
+}
+
+export default function App() {
+  const controls = useGraphControls();
   const [fullscreen, setFullscreen] = useState(false);
+  const graph = (
+    <UlyssesGraph filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight} />
+  );
 
   if (fullscreen) {
     return (
       <div className="w-full h-screen relative cyber-canvas">
-        <UlyssesGraph filterType={filterType} />
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex gap-2">
-          {FILTERS.map(f => (
-            <button
-              key={f ?? 'all'}
-              onClick={() => setFilterType(f)}
-              className="cyber-chip text-[10px] px-3 py-1"
-              style={{ ...chipStyle(filterType === f, f), backgroundColor: '#05060acc' }}
-            >
-              {f ? TYPE_LABELS[f] + 's' : 'All'}
-            </button>
-          ))}
+        {graph}
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 w-[70%]">
+          <Controls controls={controls} compact />
         </div>
         <button
           className="cyber-chip absolute bottom-5 right-5 text-[10px] px-4 py-2 z-30"
@@ -70,32 +124,12 @@ export default function App() {
         </button>
       </div>
 
-      {/* Filter bar */}
-      <div className="px-6 py-3 flex items-center gap-2 border-b flex-wrap" style={{ borderColor: 'rgba(0,240,255,0.12)' }}>
-        <span className="text-[10px] font-mono uppercase tracking-widest mr-1" style={{ color: 'rgba(0,240,255,0.35)' }}>
-          Filter:
-        </span>
-        {FILTERS.map(f => (
-          <button
-            key={f ?? 'all'}
-            onClick={() => setFilterType(f)}
-            className="cyber-chip text-[10px] px-3 py-1"
-            style={chipStyle(filterType === f, f)}
-          >
-            {f ? TYPE_LABELS[f] + 's' : 'All'}
-          </button>
-        ))}
-        <div className="ml-auto flex gap-4 text-[10px] font-mono uppercase tracking-wider">
-          {Object.entries(TYPE_COLORS).map(([type, color]) => (
-            <span key={type} className="flex items-center gap-1.5" style={{ color: color + 'aa' }}>
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full"
-                style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }}
-              />
-              {TYPE_LABELS[type]}
-            </span>
-          ))}
-        </div>
+      {/* Controls */}
+      <div className="px-6 py-3 border-b" style={{ borderColor: 'rgba(0,240,255,0.12)' }}>
+        <Controls controls={controls} />
+        {controls.types.includes('motif') && (
+          <p className="text-[10px] font-mono mt-2" style={{ color: 'rgba(255,92,122,0.7)' }}>{MOTIF_NOTE}</p>
+        )}
       </div>
 
       {/* Graph */}
@@ -108,19 +142,19 @@ export default function App() {
             boxShadow: '0 0 40px rgba(0,240,255,0.10), inset 0 0 60px rgba(0,0,0,0.6)',
           }}
         >
-          <UlyssesGraph filterType={filterType} />
+          {graph}
         </div>
         <p className="text-[10px] font-mono uppercase tracking-[0.15em] mt-3 text-center" style={{ color: 'rgba(0,240,255,0.3)' }}>
-          Click a node to trace its connections · drag to rearrange · scroll to zoom
+          {NODES.length} nodes · {EDGES.length} edges · click a node for its quotes and connections · drag · scroll to zoom
         </p>
       </div>
 
       {/* Legend cards */}
-      <div className="max-w-6xl mx-auto px-4 pb-12 grid grid-cols-2 md:grid-cols-4 gap-4">
-        <LegendCard color={TYPE_COLORS.episode} title={`${COUNTS.episode} Episodes`} desc="Each chapter — June 16, 1904" />
-        <LegendCard color={TYPE_COLORS.character} title={`${COUNTS.character} Characters`} desc="From Bloom and Stephen to the Citizen" />
-        <LegendCard color={TYPE_COLORS.theme} title={`${COUNTS.theme} Themes`} desc="Guilt, desire, fatherhood, language and more" />
-        <LegendCard color={TYPE_COLORS.place} title={`${COUNTS.place} Places`} desc="Martello Tower to Nighttown" />
+      <div className="max-w-6xl mx-auto px-4 pb-12 grid grid-cols-2 md:grid-cols-5 gap-4">
+        {Object.keys(TYPE_COLORS).map(type => (
+          <LegendCard key={type} color={TYPE_COLORS[type]}
+            title={`${COUNTS[type] ?? 0} ${TYPE_LABELS[type]}s`} desc={LEGEND_DESC[type]} />
+        ))}
       </div>
     </div>
   );
