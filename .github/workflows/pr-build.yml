@@ -1,0 +1,118 @@
+name: PR build
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: npm run lint 2>&1 | tee /tmp/lint.log
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: |
+          start=$(date +%s)
+          npm run build 2>&1 | tee /tmp/build.log
+          echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+
+      - name: Check out base for comparison
+        if: steps.build.outcome == 'success'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Build base for comparison
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        working-directory: base
+        run: |
+          npm ci
+          npm run build
+
+      - name: Compose report
+        if: always()
+        env:
+          LINT: ${{ steps.lint.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          SECONDS_TAKEN: ${{ steps.build.outputs.seconds }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          icon() { [ "$1" = "success" ] && echo "✅" || echo "❌"; }
+          warnings=$(grep -cE ' warning ' /tmp/lint.log || true)
+          {
+            echo "<!-- pr-build-report -->"
+            echo "## 🏗️ PR build report"
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Lint | $(icon "$LINT") (${warnings} warning(s)) |"
+            echo "| Build | $(icon "$BUILD") (${SECONDS_TAKEN:-?}s) |"
+            echo "| Commit | \`${HEAD_SHA::7}\` |"
+            echo "| Run | [logs]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) |"
+            echo
+            if [ "$BUILD" = "success" ]; then
+              echo "### Bundle size (vs \`${{ github.base_ref }}\`)"
+              echo
+              node scripts/build-report.mjs dist base/dist
+              echo
+              echo "_Merging to \`main\` deploys to https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/_"
+            else
+              echo "### Build failed"
+              echo
+              echo '```'
+              tail -n 30 /tmp/build.log
+              echo '```'
+            fi
+          } > /tmp/report.md
+          cat /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload dist for download
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.event.pull_request.head.sha }}
+          path: dist
+          retention-days: 7
+
+      - name: Post or update PR comment
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | contains("<!-- pr-build-report -->"))][0].id // empty')
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@/tmp/report.md >/dev/null
+          else
+            gh pr comment "$PR" --body-file /tmp/report.md
+          fi
+
+      - name: Fail if lint or build failed
+        if: steps.lint.outcome != 'success' || steps.build.outcome != 'success'
+        run: exit 1
