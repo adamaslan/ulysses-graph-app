@@ -10,13 +10,15 @@ permissions:
   pages: write
   id-token: write
 
+# Never cancel a deploy mid-flight; queue the newest one behind it instead.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,7 +26,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm run build
+      - name: Build report
+        run: |
+          {
+            echo "## Build report"
+            echo
+            echo "Commit \`${GITHUB_SHA::7}\` on \`${GITHUB_REF_NAME}\`"
+            echo
+            node scripts/build-report.mjs dist
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -32,9 +44,38 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Smoke-test the live site
+        env:
+          PAGE_URL: ${{ needs.deploy.outputs.page_url || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+        run: |
+          set -euo pipefail
+          expected="${GITHUB_SHA}"
+          for attempt in 1 2 3 4 5 6; do
+            status=$(curl -s -o /tmp/index.html -w '%{http_code}' "${PAGE_URL}?v=${GITHUB_RUN_ID}")
+            live_sha=$(curl -s "${PAGE_URL}build-info.json?v=${GITHUB_RUN_ID}" | sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p')
+            if [ "$status" = "200" ] && [ "$live_sha" = "$expected" ]; then
+              echo "### ✅ Live site verified" >> "$GITHUB_STEP_SUMMARY"
+              echo "[$PAGE_URL]($PAGE_URL) serves \`${expected::7}\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $attempt: status=$status live_sha=${live_sha:-none} (want ${expected::7}); retrying in 10s"
+            sleep 10
+          done
+          echo "### ❌ Live site check failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Expected \`${expected::7}\` at $PAGE_URL" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
