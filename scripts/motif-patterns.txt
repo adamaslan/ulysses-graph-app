@@ -1,0 +1,47 @@
+m-music|Music & sound|music(?:al)?|sound|jingle|jingling|tune|melody|dance
+m-voice|Voice & song|voice|song|sang|sing(?:s|ing)?|tenor
+m-dark|Black & dark|black|dark(?:ness)?|shadow
+m-lips|Lips, mouth & breath|lips?|mouth|breath|kiss(?:es|ed)?
+m-night|Night, moon & lamplight|night|moon|stars?|lights?|lamp|fireworks?|candle
+m-eyes|Eyes & gaze|eyes?|gaze|stared?|glance
+m-letters|Letters & writing|letters?|wrote|written|writing|postcard|envelope
+m-white|White & pale|white|pale|snow
+m-legs|Legs, stockings & the garter|legs?|feet|foot|ankles?|stockings?|garter
+m-clothes|Dress & undress|dress\w*|gown|slip|shift|coat|skirt|boots?|shoes?
+m-water|Water, bath & wet|water|bath|stream|sea|strand|wet
+m-pockets|The pocket check|pockets?|potato|soap|locket|photocard
+m-hair|Hair|hair|curls?|tresses
+m-thou|Archaic voice (thou/thee)|thou|thee|thy|thine
+m-blue|Blue|blue
+m-hands|Hands & fingers|hands?|fingers?|palm
+m-names|Names & aliases|names?|henry|alias
+m-flowers|Flowers & roses|roses?|flowers?|lilies|lily|violets?
+m-green|Green|green
+m-hat|The hat|hat
+m-bed|Bed & bedroom|beds?|bedroom|pillow|bedspread
+m-bells|Bells, whistles & horns|bells?|whistl\w+|horn|chime\w*
+m-skin|Skin, flesh & the bosom|skin|flesh|naked|bosom|breast\w*
+m-stranger|The stranger / mackintosh|mackintosh|macintosh|stranger
+m-veil|The veil & the blush|veil|blush(?:es|ed|ing)?|bashful
+m-smell|Smell & perfume|smell|perfume|scent|sniff\w*
+m-dogs|Dogs (Garryowen)|garryowen|terrier|retriever|dog|wolfdog|dachshund
+m-gold|Gold & bronze|gold(?:en)?|bronze
+m-tears|Tears & weeping|tears?|weep\w*|cry|cried|crying
+m-mirror|Mirror & reflection|mirror|looking-?glass|lookingglass|reflect\w*
+m-jingle|Jingle & quoits|jingle|jingling|quoits
+m-hunger|Hunger & eating|hungry|eat(?:s|ing)?|dinner|sandwich|gobbl\w+|appetite|bacon
+m-kidney|The kidney|kidney
+m-smoke|Smoke & cigars|smok\w+|cigars?|cigarettes?|pipes?
+m-keys|Keys & locks|keys?|locks?
+m-lane|The wet night in the lane|wet night|lane
+m-sweets|Sweets of Sin|sweets of sin
+m-cuckoo|The cuckoo|cuckoo
+m-four|Four o'clock|four o.?clock|4 ?p\.?m
+m-eleven|Eleven (Rudy's days)|eleven
+m-gulls|Gulls & birds|gulls?|birds?
+m-litany|The litany (pray for us)|pray for us|litany
+m-fireworks|Fireworks & the Roman candle|fireworks?|roman candle|rocket
+m-gasjet|Mananaun & the gasjet|mananaun|gasjet
+m-return|Return, return (Clan Milly)|return,? return|clan milly
+m-cat|The cat|cat|mrkgnao
+m-howth|Howth & the Bailey light|howth|bailey

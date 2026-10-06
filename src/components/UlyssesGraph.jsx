@@ -1,11 +1,26 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import * as d3 from 'd3';
-import { NODES, EDGES, TYPE_COLORS, TYPE_LABELS } from '../data/graphData';
+import NodePanel from './NodePanel';
+import { NODES, EDGES, DEGREE, LAYERS, TYPE_COLORS, TYPE_LABELS } from '../data/graphData';
 
 // Edge visual states. Idle edges are barely-there cyan traces; connected edges
 // blaze in the selected node's own hue.
 const EDGE_IDLE   = '#00f0ff20';
 const EDGE_DIMMED  = '#00f0ff08';
+const EDGE_COOCCUR = '#ff2bd61c';   // derived co-occurrence: present, but quieter than structural edges
+const EDGE_HIERARCHY = '#ff9f1a40'; // sub-theme and part membership
+
+const idleStroke = d => {
+  if (d.kind === 'co_occurs') return EDGE_COOCCUR;
+  if (d.kind === 'child_of' || d.kind === 'part_of') return EDGE_HIERARCHY;
+  return EDGE_IDLE;
+};
+
+/** Node radius grows with degree so hubs read as hubs. */
+const radiusOf = d => Math.min(17, 4 + Math.sqrt(DEGREE.get(d.id) || 1) * 1.5) + (d.type === 'episode' ? 2 : 0);
+
+/** Minimum degree a node needs for its label to show at a given zoom level. */
+const labelMinDegree = k => (k > 2.4 ? 0 : k > 1.6 ? 6 : 16);
 
 const DIM_OPACITY = 0.12;
 
@@ -30,42 +45,57 @@ function buildAdjacency(edges) {
   return adjacency;
 }
 
-export default function UlyssesGraph({ filterType }) {
+export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 }) {
   const svgRef       = useRef(null);
   const nodeGroupRef = useRef(null);
   const linkRef      = useRef(null);
   const simRef       = useRef(null);
   const adjacencyRef = useRef(new Map());
   const nodesRef      = useRef([]);
+  const zoomRef       = useRef(1);
+  const focusRef      = useRef(new Set());
+  const searchRef     = useRef('');
   const [selected, setSelected] = useState(null);
   const [neighbors, setNeighbors] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // A filtered category keeps its own nodes plus every node one edge away, so
-  // cross-type relationships (e.g. an episode's characters) stay connected
-  // instead of being stranded as isolated dots.
-  const categoryIds = filterType
-    ? new Set(NODES.filter(n => n.type === filterType).map(n => n.id))
-    : null;
-
-  const visibleIds = categoryIds
-    ? new Set([
-        ...categoryIds,
-        ...EDGES.filter(e => categoryIds.has(e.source) || categoryIds.has(e.target))
-          .flatMap(e => [e.source, e.target]),
-      ])
-    : new Set(NODES.map(n => n.id));
-
-  const filteredNodes = filterType
-    ? NODES.filter(n => visibleIds.has(n.id))
-    : NODES;
-
-  const filteredEdges = EDGES.filter(
-    e => visibleIds.has(e.source) && visibleIds.has(e.target)
-  );
+  // The layer picks which node types are on screen. A filtered category keeps
+  // its own nodes plus every node one edge away, so cross-type relationships
+  // stay connected instead of being stranded as isolated dots. Co-occurrence
+  // edges below `minWeight` are dropped.
+  const { filteredNodes, filteredEdges } = useMemo(() => {
+    const layerTypes = new Set(LAYERS.find(l => l.id === layer)?.types ?? LAYERS.at(-1).types);
+    const inLayer = NODES.filter(n => layerTypes.has(n.type));
+    const layerIds = new Set(inLayer.map(n => n.id));
+    const strong = EDGES.filter(
+      e => layerIds.has(e.source) && layerIds.has(e.target) && (e.kind !== 'co_occurs' || (e.weight ?? 1) >= minWeight)
+    );
+    if (!filterType) return { filteredNodes: inLayer, filteredEdges: strong };
+    const categoryIds = new Set(inLayer.filter(n => n.type === filterType).map(n => n.id));
+    const visible = new Set([
+      ...categoryIds,
+      ...strong.filter(e => categoryIds.has(e.source) || categoryIds.has(e.target)).flatMap(e => [e.source, e.target]),
+    ]);
+    return {
+      filteredNodes: inLayer.filter(n => visible.has(n.id)),
+      filteredEdges: strong.filter(e => visible.has(e.source) && visible.has(e.target)),
+    };
+  }, [filterType, layer, minWeight]);
 
   /** Return every node connected to `id` by a single edge. */
   const neighborsOf = useCallback((id) => adjacencyRef.current.get(id) ?? new Set(), []);
+
+  /** Show a label if the node is a hub at this zoom, is in the current selection, or matches the search. */
+  const updateLabels = useCallback(() => {
+    const nodeGroup = nodeGroupRef.current;
+    if (!nodeGroup) return;
+    const minDegree = labelMinDegree(zoomRef.current);
+    const term = searchRef.current;
+    nodeGroup.select('text').attr('display', d =>
+      (DEGREE.get(d.id) ?? 0) >= minDegree || focusRef.current.has(d.id) || (term && d.label.toLowerCase().includes(term))
+        ? null : 'none'
+    );
+  }, []);
 
   /**
    * Paint the full selection state: the clicked node, its direct neighbours and
@@ -79,6 +109,7 @@ export default function UlyssesGraph({ filterType }) {
     const focusId = nodeData.id;
     const linked = neighborsOf(focusId);
     const accent = TYPE_COLORS[nodeData.type];
+    focusRef.current = new Set([focusId, ...linked]);
 
     const isConnected = d => {
       const sid = edgeId(d, 'source');
@@ -120,7 +151,8 @@ export default function UlyssesGraph({ filterType }) {
     nodeGroup.select('text')
       .attr('fill', d => (d.id === focusId ? '#ffffff' : TYPE_COLORS[d.type]))
       .attr('font-weight', d => (d.id === focusId || linked.has(d.id) ? 700 : 400));
-  }, [neighborsOf]);
+    updateLabels();
+  }, [neighborsOf, updateLabels]);
 
   /** Return the whole graph to its resting state. */
   const clearSelection = useCallback(() => {
@@ -128,8 +160,9 @@ export default function UlyssesGraph({ filterType }) {
     const link = linkRef.current;
     if (!nodeGroup || !link) return;
 
+    focusRef.current = new Set();
     link
-      .attr('stroke', EDGE_IDLE)
+      .attr('stroke', idleStroke)
       .attr('stroke-width', 1)
       .attr('stroke-opacity', 1)
       .attr('filter', null)
@@ -146,13 +179,15 @@ export default function UlyssesGraph({ filterType }) {
     nodeGroup.select('text')
       .attr('fill', d => TYPE_COLORS[d.type])
       .attr('font-weight', 400);
-  }, []);
+    updateLabels();
+  }, [updateLabels]);
 
   useEffect(() => {
     const container = svgRef.current.parentElement;
     const W = container.clientWidth;
     const H = container.clientHeight;
 
+    setSelected(null);
     d3.select(svgRef.current).selectAll('*').remove();
 
     const svg = d3.select(svgRef.current)
@@ -191,7 +226,12 @@ export default function UlyssesGraph({ filterType }) {
 
     const g = svg.append('g');
 
-    svg.call(d3.zoom().scaleExtent([0.3, 4]).on('zoom', e => g.attr('transform', e.transform)));
+    zoomRef.current = 1;
+    svg.call(d3.zoom().scaleExtent([0.3, 4]).on('zoom', e => {
+      g.attr('transform', e.transform);
+      zoomRef.current = e.transform.k;
+      updateLabels();
+    }));
 
     // Data clones
     const nodes = filteredNodes.map(d => ({ ...d }));
@@ -199,21 +239,31 @@ export default function UlyssesGraph({ filterType }) {
     adjacencyRef.current = buildAdjacency(filteredEdges);
     nodesRef.current = nodes;
 
-    // Radius by type
-    const radius = d => d.type === 'episode' ? 12 : d.type === 'character' ? 10 : 8;
+    const radius = radiusOf;
 
+    // Forces tuned for ~230 nodes / ~1,600 edges: weaker charge and shorter links
+    // than the original 58-node layout, weight-scaled link strength so
+    // co-occurrence edges pull gently, and a mild pull to the centre so
+    // unconnected clusters do not drift off screen.
+    const dense = nodes.length > 100;
     const sim = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(edges).id(d => d.id).distance(80).strength(0.4))
-      .force('charge', d3.forceManyBody().strength(-180))
+      .force('link', d3.forceLink(edges).id(d => d.id)
+        .distance(dense ? 75 : 80)
+        .strength(d => (d.kind === 'co_occurs' ? 0.05 : 0.3) + Math.min(0.15, (d.weight ?? 1) * 0.02)))
+      .force('charge', d3.forceManyBody().strength(dense ? -260 : -180).distanceMax(700))
       .force('center', d3.forceCenter(W / 2, H / 2))
-      .force('collision', d3.forceCollide().radius(d => radius(d) + 6));
+      .force('x', d3.forceX(W / 2).strength(0.045))
+      .force('y', d3.forceY(H / 2).strength(0.045))
+      .force('collision', d3.forceCollide().radius(d => radius(d) + 4))
+      .alphaDecay(0.03)
+      .velocityDecay(0.4);
     simRef.current = sim;
 
     const link = g.append('g')
       .selectAll('line')
       .data(edges)
       .join('line')
-      .attr('stroke', EDGE_IDLE)
+      .attr('stroke', idleStroke)
       .attr('stroke-width', 1)
       .attr('stroke-linecap', 'round');
     linkRef.current = link;
@@ -247,9 +297,11 @@ export default function UlyssesGraph({ filterType }) {
       .attr('r', radius)
       .attr('fill', d => TYPE_COLORS[d.type] + '18')
       .attr('stroke', d => TYPE_COLORS[d.type])
-      .attr('stroke-width', 1.5);
+      .attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', d => (d.thin ? '2 2' : null));
 
     nodeGroup.append('text')
+      .attr('class', 'node-label')
       .text(d => d.type === 'episode' ? d.number || d.label : d.label)
       .attr('text-anchor', 'middle')
       .attr('dy', d => -radius(d) - 6)
@@ -288,8 +340,9 @@ export default function UlyssesGraph({ filterType }) {
       nodeGroup.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 
+    updateLabels();
     return () => { sim.stop(); };
-  }, [filterType, applySelection, clearSelection]);
+  }, [filteredNodes, filteredEdges, updateLabels]);
 
   // Paint the current selection. Runs as a side effect of `selected` changing
   // (never inside the setSelected updater itself, which must stay pure).
@@ -311,14 +364,14 @@ export default function UlyssesGraph({ filterType }) {
   useEffect(() => {
     if (!nodeGroupRef.current) return;
     const term = searchTerm.toLowerCase();
+    searchRef.current = term;
     const matches = d => !term || d.label.toLowerCase().includes(term);
     nodeGroupRef.current.select('.node-body')
       .attr('opacity', d => (matches(d) ? 1 : 0.15));
     nodeGroupRef.current.select('text')
       .attr('opacity', d => (matches(d) ? 1 : 0.1));
-  }, [searchTerm]);
-
-  const accent = selected ? TYPE_COLORS[selected.type] : '#00f0ff';
+    updateLabels();
+  }, [searchTerm, updateLabels]);
 
   return (
     <div className="relative w-full h-full cyber-canvas">
@@ -337,45 +390,12 @@ export default function UlyssesGraph({ filterType }) {
 
       {/* Detail panel */}
       {selected && (
-        <div
-          className="cyber-panel absolute top-3 right-3 z-20 w-80 p-4 text-sm"
-          style={{ '--accent': accent }}
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="text-[10px] uppercase tracking-[0.25em] mb-1 font-mono" style={{ color: accent }}>
-            {TYPE_LABELS[selected.type]}{selected.number ? ` // ${String(selected.number).padStart(2, '0')}` : ''}
-          </div>
-          <div className="font-bold text-white text-base mb-2 glitch-title">{selected.label}</div>
-          <div className="text-white/60 text-xs leading-relaxed">{selected.summary}</div>
-
-          <div className="mt-3 pt-3 border-t" style={{ borderColor: accent + '33' }}>
-            <div className="text-[10px] uppercase tracking-[0.2em] font-mono mb-2" style={{ color: accent }}>
-              {neighbors.length} connection{neighbors.length === 1 ? '' : 's'}
-            </div>
-            <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
-              {neighbors.map(n => (
-                <span
-                  key={n.id}
-                  className="text-[10px] px-2 py-0.5 rounded-sm font-mono border"
-                  style={{
-                    color: TYPE_COLORS[n.type],
-                    borderColor: TYPE_COLORS[n.type] + '55',
-                    backgroundColor: TYPE_COLORS[n.type] + '12',
-                  }}
-                >
-                  {n.label}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <button
-            className="mt-3 text-[10px] font-mono uppercase tracking-widest text-white/30 hover:text-white/80 transition"
-            onClick={() => setSelected(null)}
-          >
-            [ x ] close
-          </button>
-        </div>
+        <NodePanel
+          node={selected}
+          neighbors={neighbors}
+          onSelect={setSelected}
+          onClose={() => setSelected(null)}
+        />
       )}
     </div>
   );
