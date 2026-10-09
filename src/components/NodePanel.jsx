@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { TYPE_COLORS, TYPE_LABELS, loadCorpus } from '../data/graphData';
+import { useEffect, useRef, useState } from 'react';
+import { TYPE_COLORS, TYPE_LABELS, loadCorpus, tint } from '../data/graphData';
 
 const COLLAPSE_AT = 420;   // characters before a passage folds behind "more"
 const QUOTES_SHOWN = 4;    // passages shown before "show all"
@@ -30,8 +30,8 @@ function Chip({ children, color, title }) {
   return (
     <span
       title={title}
-      className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wider border"
-      style={{ color, borderColor: color + '66', backgroundColor: color + '14' }}
+      className="mono text-[11px] px-2 py-0.5 rounded-full border"
+      style={{ color, borderColor: tint(color, 50), backgroundColor: tint(color, 10) }}
     >
       {children}
     </span>
@@ -44,38 +44,38 @@ function Passage({ block, accent }) {
   const long = full.length > COLLAPSE_AT;
   const shown = open || !long ? block.paras : [full.slice(0, COLLAPSE_AT).trimEnd() + '…'];
   return (
-    <figure className="border-l-2 pl-3 py-1" style={{ borderColor: accent + '66' }}>
+    <figure className="border-l-2 pl-3 py-1" style={{ borderColor: tint(accent, 45) }}>
       <figcaption className="flex flex-wrap items-center gap-1.5 mb-1">
-        <span className="text-[10px] font-mono text-white/70">{block.label}</span>
-        {block.flag && <Chip color="#ffb020" title={block.flagnote}>{FLAG_TEXT[block.flag]}</Chip>}
+        <span className="mono text-xs">{block.label}</span>
+        {block.flag && <Chip color="var(--warn)" title={block.flagnote}>{FLAG_TEXT[block.flag]}</Chip>}
       </figcaption>
       {shown.map((p, i) => (
-        <blockquote key={i} className="text-[11px] leading-relaxed text-white/60 italic whitespace-pre-line mb-1.5">
+        <blockquote key={i} className="text-[15px] leading-relaxed italic whitespace-pre-line mb-2">
           {p}
         </blockquote>
       ))}
-      <div className="flex items-center gap-2 text-[9px] font-mono text-white/30">
+      <div className="flex items-center gap-2 mono text-[11px] soft">
         <span>{block.id} · L{block.lines}{block.page ? ` · p.${block.page}` : ''}</span>
         {long && (
-          <button className="underline hover:text-white/70" onClick={() => setOpen(o => !o)}>
+          <button className="underline min-h-8 px-1" onClick={() => setOpen(o => !o)}>
             {open ? 'less' : 'more'}
           </button>
         )}
       </div>
-      {block.flagnote && <p className="text-[10px] text-amber-300/60 mt-1">{block.flagnote}</p>}
-      {block.source && <p className="text-[9px] text-white/30 mt-1">Source: {block.source}</p>}
+      {block.flagnote && <p className="text-xs mt-1" style={{ color: 'var(--warn)' }}>{block.flagnote}</p>}
+      {block.source && <p className="mono text-[11px] soft mt-1">Source: {block.source}</p>}
     </figure>
   );
 }
 
 function PassageList({ title, blocks, accent }) {
   const [all, setAll] = useState(false);
-  if (blocks === null) return <p className="text-[10px] font-mono text-white/30">loading text…</p>;
+  if (blocks === null) return <p className="mono text-xs soft">loading text…</p>;
   if (!blocks.length) return null;
   const shown = all ? blocks : blocks.slice(0, QUOTES_SHOWN);
   return (
-    <div className="mt-3 pt-3 border-t" style={{ borderColor: accent + '33' }}>
-      <div className="text-[10px] uppercase tracking-[0.2em] font-mono mb-2" style={{ color: accent }}>
+    <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--rule)' }}>
+      <div className="eyebrow mb-2" style={{ color: accent }}>
         {title} ({blocks.length})
       </div>
       <div className="space-y-3">
@@ -83,7 +83,7 @@ function PassageList({ title, blocks, accent }) {
       </div>
       {blocks.length > QUOTES_SHOWN && (
         <button
-          className="mt-2 text-[10px] font-mono uppercase tracking-widest text-white/40 hover:text-white/80"
+          className="chip mt-2"
           onClick={() => setAll(a => !a)}
         >
           {all ? 'show fewer' : `show all ${blocks.length}`}
@@ -98,14 +98,14 @@ function Neighbors({ neighbors, accent, onSelect }) {
     neighbors.reduce((acc, n) => ((acc[n.type] ??= []).push(n), acc), {})
   ).sort((a, b) => b[1].length - a[1].length);
   return (
-    <div className="mt-3 pt-3 border-t" style={{ borderColor: accent + '33' }}>
-      <div className="text-[10px] uppercase tracking-[0.2em] font-mono mb-2" style={{ color: accent }}>
+    <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--rule)' }}>
+      <div className="eyebrow mb-2" style={{ color: accent }}>
         {neighbors.length} connection{neighbors.length === 1 ? '' : 's'}
       </div>
       {groups.map(([type, list], i) => (
         <details key={type} open={i === 0 && list.length <= 12} className="mb-1.5">
           <summary
-            className="cursor-pointer text-[10px] font-mono uppercase tracking-wider select-none"
+            className="cursor-pointer mono text-xs py-1 select-none"
             style={{ color: TYPE_COLORS[type] }}
           >
             {TYPE_LABELS[type]}s ({list.length})
@@ -115,12 +115,8 @@ function Neighbors({ neighbors, accent, onSelect }) {
               <button
                 key={n.id}
                 onClick={() => onSelect(n)}
-                className="text-[10px] px-2 py-0.5 rounded-sm font-mono border hover:brightness-150"
-                style={{
-                  color: TYPE_COLORS[n.type],
-                  borderColor: TYPE_COLORS[n.type] + '55',
-                  backgroundColor: TYPE_COLORS[n.type] + '12',
-                }}
+                className="chip"
+                style={{ '--accent': TYPE_COLORS[n.type], color: TYPE_COLORS[n.type] }}
               >
                 {n.label}
               </button>
@@ -132,7 +128,40 @@ function Neighbors({ neighbors, accent, onSelect }) {
   );
 }
 
-export default function NodePanel({ node, neighbors, onSelect, onClose }) {
+// Bottom-sheet snap heights as a share of the viewport. Peek leaves the selected
+// node and its neighbours visible above the sheet.
+const SHEET_SNAPS = [0.32, 0.6, 0.92];
+export const SHEET_PEEK_SHARE = SHEET_SNAPS[0];
+const SWIPE_DISTANCE = 40; // px of vertical drag that counts as a swipe
+
+/** Drag handle for the sheet: tap cycles snaps, swipe up grows, swipe down shrinks or closes. */
+function SheetHandle({ snap, setSnap, onClose }) {
+  const startY = useRef(null);
+  const settle = endY => {
+    const dy = endY - startY.current;
+    startY.current = null;
+    if (Math.abs(dy) < SWIPE_DISTANCE) { setSnap((snap + 1) % SHEET_SNAPS.length); return; }
+    if (dy < 0) { setSnap(Math.min(SHEET_SNAPS.length - 1, snap + 1)); return; }
+    if (snap === 0) { onClose(); return; }
+    setSnap(snap - 1);
+  };
+  return (
+    <button
+      type="button"
+      aria-label="Resize details"
+      className="block w-full pt-2 pb-3 touch-none"
+      onPointerDown={e => { startY.current = e.clientY; e.currentTarget.setPointerCapture(e.pointerId); }}
+      onPointerUp={e => startY.current !== null && settle(e.clientY)}
+      onPointerCancel={() => { startY.current = null; }}
+    >
+      <span className="block mx-auto h-1.5 w-12 rounded-full" style={{ background: 'var(--rule)' }} />
+    </button>
+  );
+}
+
+export default function NodePanel({ node, neighbors, onSelect, onClose, mobile = false }) {
+  const [snap, setSnap] = useState(0);
+  useEffect(() => { setSnap(0); }, [node.id]);
   const accent = TYPE_COLORS[node.type];
   const quotes = useBlocks(node.quotes);
   const notes = useBlocks(node.notes);
@@ -143,18 +172,23 @@ export default function NodePanel({ node, neighbors, onSelect, onClose }) {
 
   return (
     <div
-      className="cyber-panel absolute top-3 right-3 z-20 w-[min(30rem,calc(100%-1.5rem))] max-h-[88%] overflow-y-auto p-4 text-sm"
-      style={{ '--accent': accent }}
+      className={mobile
+        ? 'panel fixed inset-x-0 bottom-0 z-30 overflow-y-auto px-4 pb-6 text-sm rounded-b-none rounded-t-xl'
+        : 'panel absolute top-3 right-3 z-20 w-[min(30rem,calc(100%-1.5rem))] max-h-[88%] overflow-y-auto p-4 text-sm'}
+      style={mobile
+        ? { '--accent': accent, height: `${SHEET_SNAPS[snap] * 100}dvh`, paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }
+        : { '--accent': accent }}
       onClick={e => e.stopPropagation()}
     >
-      <div className="text-[10px] uppercase tracking-[0.25em] mb-1 font-mono" style={{ color: accent }}>
+      {mobile && <SheetHandle snap={snap} setSnap={setSnap} onClose={onClose} />}
+      <div className="eyebrow mb-1" style={{ color: accent }}>
         {TYPE_LABELS[node.type]}{node.number ? ` // ${String(node.number).padStart(2, '0')}` : ''}
         {node.parent ? ` // sub-theme` : ''}
       </div>
-      <div className="font-bold text-white text-base mb-2 glitch-title">{node.label}</div>
-      {node.thin && <div className="mb-2"><Chip color="#ffb020">{thinReason}</Chip></div>}
-      <div className="text-white/60 text-xs leading-relaxed">{node.summary}</div>
-      {node.setting && <div className="text-[10px] font-mono text-white/30 mt-1">{node.setting}</div>}
+      <div className="title text-2xl leading-tight mb-2">{node.label}</div>
+      {node.thin && <div className="mb-2"><Chip color="var(--warn)">{thinReason}</Chip></div>}
+      <div className="text-[15px] leading-relaxed soft">{node.summary}</div>
+      {node.setting && <div className="mono text-xs soft mt-1">{node.setting}</div>}
 
       {node.block && (
         <PassageList title="Full analysis" blocks={analysis} accent={accent} />
@@ -164,10 +198,10 @@ export default function NodePanel({ node, neighbors, onSelect, onClose }) {
       <Neighbors neighbors={neighbors} accent={accent} onSelect={onSelect} />
 
       <button
-        className="mt-3 text-[10px] font-mono uppercase tracking-widest text-white/30 hover:text-white/80 transition"
+        className="chip mt-4"
         onClick={onClose}
       >
-        [ x ] close
+        Close
       </button>
     </div>
   );

@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import UlyssesGraph from './components/UlyssesGraph';
-import { NODES, EDGES, LAYERS, TYPE_COLORS, TYPE_LABELS } from './data/graphData';
+import { useMediaQuery } from './hooks';
+import { SHEET_PEEK_SHARE as PEEK_SHARE } from './components/NodePanel';
+import { NODES, EDGES, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES } from './data/graphData';
 
 const COUNTS = NODES.reduce((acc, n) => {
   acc[n.type] = (acc[n.type] || 0) + 1;
@@ -24,12 +26,20 @@ const MOTIF_NOTE =
   'Motifs are mined from the notes file. Episodes 6, 7, 9 and 10 have no captured Joyce passages, ' +
   'so no motif reaches them. That reflects the notes, not the novel.';
 
-/** Filter pill styling — neon outline when active, ghosted cyan when not. */
-function chipStyle(active, type) {
-  const color = type ? TYPE_COLORS[type] : '#00f0ff';
-  return active
-    ? { borderColor: color, color, backgroundColor: color + '14', boxShadow: `0 0 12px ${color}55` }
-    : { borderColor: 'rgba(0,240,255,0.18)', color: 'rgba(0,240,255,0.45)', backgroundColor: 'transparent' };
+const THEMES = ['system', 'light', 'dark'];
+
+/** Cycle system → light → dark. The choice is kept per viewer; storage may be blocked. */
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('ulysses-theme') || 'system'; } catch { return 'system'; }
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', theme);
+    try { localStorage.setItem('ulysses-theme', theme); } catch { /* storage unavailable */ }
+  }, [theme]);
+  return [theme, () => setTheme(t => THEMES[(THEMES.indexOf(t) + 1) % THEMES.length])];
 }
 
 function useGraphControls() {
@@ -44,58 +54,107 @@ function useGraphControls() {
   };
 }
 
+function LayerChips({ controls }) {
+  return LAYERS.map(l => (
+    <button key={l.id} onClick={() => controls.chooseLayer(l.id)} className="chip shrink-0"
+      aria-pressed={controls.layer === l.id}>
+      {l.label}
+    </button>
+  ));
+}
+
+function TypeChips({ controls }) {
+  return [null, ...controls.types].map(f => (
+    <button key={f ?? 'all'} onClick={() => controls.setFilterType(f)} className="chip"
+      aria-pressed={controls.filterType === f} style={f ? { '--accent': TYPE_COLORS[f] } : undefined}>
+      {f ? TYPE_LABELS[f] + 's' : 'All'}
+    </button>
+  ));
+}
+
+function WeightSlider({ controls }) {
+  return (
+    <label className="flex items-center gap-2 mono text-xs soft"
+      title="Hide co-occurrence edges shared by fewer passages than this">
+      co-occurs ≥ {controls.minWeight}
+      <input type="range" min="1" max="8" value={controls.minWeight}
+        onChange={e => controls.setMinWeight(Number(e.target.value))} className="w-28" />
+    </label>
+  );
+}
+
 function Controls({ controls, compact = false }) {
-  const { layer, filterType, minWeight, types, chooseLayer, setFilterType, setMinWeight } = controls;
-  const pill = 'cyber-chip text-[10px] px-3 py-1';
   return (
     <div className={`flex items-center gap-2 flex-wrap ${compact ? 'justify-center' : ''}`}>
-      {!compact && (
-        <span className="text-[10px] font-mono uppercase tracking-widest mr-1" style={{ color: 'rgba(0,240,255,0.35)' }}>
-          Layer:
-        </span>
+      {!compact && <span className="eyebrow mr-1">Layer</span>}
+      <LayerChips controls={controls} />
+      <span className="mx-1 soft" aria-hidden="true">·</span>
+      <TypeChips controls={controls} />
+      <span className="ml-2"><WeightSlider controls={controls} /></span>
+    </div>
+  );
+}
+
+/** Phone layout: the graph fills the screen; filters live in a sheet. */
+function MobileApp({ controls, theme, cycleTheme }) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  return (
+    <div className="canvas flex flex-col" style={{ height: '100dvh', paddingTop: 'env(safe-area-inset-top)' }}>
+      <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: 'var(--rule)' }}>
+        <h1 className="title text-xl m-0 mr-auto">Ulysses</h1>
+        <button className="chip" onClick={cycleTheme} aria-label="Change colour theme">{theme}</button>
+        <button className="chip" onClick={() => setFiltersOpen(true)}>Filters</button>
+      </div>
+      <div className="flex gap-2 px-3 py-2 overflow-x-auto border-b" style={{ borderColor: 'var(--rule)' }}>
+        <LayerChips controls={controls} />
+      </div>
+      <div className="relative flex-1 min-h-0">
+        <UlyssesGraph
+          filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight}
+          isMobile sheetInset={PEEK_SHARE * window.innerHeight}
+        />
+      </div>
+      {filtersOpen && (
+        <div className="fixed inset-0 z-40" onClick={() => setFiltersOpen(false)}>
+          <div className="panel fixed inset-x-0 bottom-0 rounded-b-none rounded-t-xl p-4 flex flex-col gap-3"
+            style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="eyebrow">Show</div>
+            <div className="flex flex-wrap gap-2"><TypeChips controls={controls} /></div>
+            <WeightSlider controls={controls} />
+            {controls.types.includes('motif') && (
+              <p className="mono text-xs m-0" style={{ color: 'var(--warn)' }}>{MOTIF_NOTE}</p>
+            )}
+            <button className="chip self-start" onClick={() => setFiltersOpen(false)}>Done</button>
+          </div>
+        </div>
       )}
-      {LAYERS.map(l => (
-        <button key={l.id} onClick={() => chooseLayer(l.id)} className={pill}
-          style={{ ...chipStyle(layer === l.id, null), ...(compact ? { backgroundColor: '#05060acc' } : {}) }}>
-          {l.label}
-        </button>
-      ))}
-      <span className="mx-1 text-white/10">|</span>
-      {[null, ...types].map(f => (
-        <button key={f ?? 'all'} onClick={() => setFilterType(f)} className={pill}
-          style={{ ...chipStyle(filterType === f, f), ...(compact ? { backgroundColor: '#05060acc' } : {}) }}>
-          {f ? TYPE_LABELS[f] + 's' : 'All'}
-        </button>
-      ))}
-      <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider ml-2"
-        style={{ color: 'rgba(255,43,214,0.7)' }} title="Hide co-occurrence edges shared by fewer passages than this">
-        co-occurs ≥ {minWeight}
-        <input type="range" min="1" max="8" value={minWeight}
-          onChange={e => setMinWeight(Number(e.target.value))} className="w-24 accent-fuchsia-500" />
-      </label>
     </div>
   );
 }
 
 export default function App() {
   const controls = useGraphControls();
+  const [theme, cycleTheme] = useTheme();
   const [fullscreen, setFullscreen] = useState(false);
+  const isMobile = useMediaQuery('(max-width: 640px)');
   const graph = (
     <UlyssesGraph filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight} />
   );
+  const themeButton = (
+    <button onClick={cycleTheme} className="chip" aria-label="Change colour theme">Theme: {theme}</button>
+  );
+
+  if (isMobile) return <MobileApp controls={controls} theme={theme} cycleTheme={cycleTheme} />;
 
   if (fullscreen) {
     return (
-      <div className="w-full h-screen relative cyber-canvas">
+      <div className="w-full h-screen relative canvas">
         {graph}
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 w-[70%]">
           <Controls controls={controls} compact />
         </div>
-        <button
-          className="cyber-chip absolute bottom-5 right-5 text-[10px] px-4 py-2 z-30"
-          style={chipStyle(false, null)}
-          onClick={() => setFullscreen(false)}
-        >
+        <button className="chip absolute bottom-5 right-5 z-30" onClick={() => setFullscreen(false)}>
           ← Exit
         </button>
       </div>
@@ -103,56 +162,35 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen text-white cyber-canvas">
-      {/* Header */}
-      <div className="px-6 py-4 flex items-center justify-between border-b" style={{ borderColor: 'rgba(0,240,255,0.15)' }}>
-        <div className="text-[10px] font-mono uppercase tracking-[0.3em]" style={{ color: 'rgba(0,240,255,0.4)' }}>
-          James Joyce // 1922
+    <div className="min-h-screen canvas">
+      <div className="px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b" style={{ borderColor: 'var(--rule)' }}>
+        <div className="eyebrow">James Joyce · 1922</div>
+        <h1 className="title text-3xl m-0">Ulysses, as a graph</h1>
+        <div className="flex gap-2">
+          {themeButton}
+          <button onClick={() => setFullscreen(true)} className="chip">Fullscreen ↗</button>
         </div>
-        <h1
-          className="text-lg font-bold tracking-[0.2em] uppercase font-mono"
-          style={{ color: '#00f0ff', textShadow: '0 0 18px #00f0ff66, 1px 0 0 #ff2bd644' }}
-        >
-          Ulysses · Wiki Graph
-        </h1>
-        <button
-          onClick={() => setFullscreen(true)}
-          className="cyber-chip text-[10px] px-3 py-1.5"
-          style={chipStyle(false, null)}
-        >
-          Fullscreen ↗
-        </button>
       </div>
 
-      {/* Controls */}
-      <div className="px-6 py-3 border-b" style={{ borderColor: 'rgba(0,240,255,0.12)' }}>
+      <div className="px-4 sm:px-6 py-3 border-b" style={{ borderColor: 'var(--rule)' }}>
         <Controls controls={controls} />
         {controls.types.includes('motif') && (
-          <p className="text-[10px] font-mono mt-2" style={{ color: 'rgba(255,92,122,0.7)' }}>{MOTIF_NOTE}</p>
+          <p className="mono text-xs mt-2" style={{ color: 'var(--warn)' }}>{MOTIF_NOTE}</p>
         )}
       </div>
 
-      {/* Graph */}
       <div className="mx-auto px-4 py-6 max-w-6xl">
-        <div
-          className="overflow-hidden border"
-          style={{
-            height: '72vh',
-            borderColor: 'rgba(0,240,255,0.25)',
-            boxShadow: '0 0 40px rgba(0,240,255,0.10), inset 0 0 60px rgba(0,0,0,0.6)',
-          }}
-        >
+        <div className="overflow-hidden border rounded" style={{ height: '72vh', borderColor: 'var(--rule)' }}>
           {graph}
         </div>
-        <p className="text-[10px] font-mono uppercase tracking-[0.15em] mt-3 text-center" style={{ color: 'rgba(0,240,255,0.3)' }}>
+        <p className="mono text-xs soft mt-3 text-center">
           {NODES.length} nodes · {EDGES.length} edges · click a node for its quotes and connections · drag · scroll to zoom
         </p>
       </div>
 
-      {/* Legend cards */}
-      <div className="max-w-6xl mx-auto px-4 pb-12 grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="max-w-6xl mx-auto px-4 pb-12 grid grid-cols-2 md:grid-cols-5 gap-3">
         {Object.keys(TYPE_COLORS).map(type => (
-          <LegendCard key={type} color={TYPE_COLORS[type]}
+          <LegendCard key={type} type={type}
             title={`${COUNTS[type] ?? 0} ${TYPE_LABELS[type]}s`} desc={LEGEND_DESC[type]} />
         ))}
       </div>
@@ -160,27 +198,17 @@ export default function App() {
   );
 }
 
-function LegendCard({ color, title, desc }) {
+const SHAPE_GLYPH = { circle: '●', diamond: '◆', square: '■' };
+
+function LegendCard({ type, title, desc }) {
+  const color = TYPE_COLORS[type];
   return (
-    <div
-      className="p-4 border"
-      style={{
-        borderColor: color + '33',
-        borderLeft: `2px solid ${color}`,
-        background: 'linear-gradient(160deg, rgba(16,20,31,0.7), rgba(5,6,10,0.7))',
-        clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%)',
-      }}
-    >
+    <div className="legend-card" style={{ '--accent': color }}>
       <div className="flex items-center gap-2 mb-1">
-        <span
-          className="inline-block w-2 h-2 rounded-full"
-          style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}` }}
-        />
-        <span className="font-mono font-semibold text-xs uppercase tracking-wider" style={{ color }}>
-          {title}
-        </span>
+        <span aria-hidden="true" style={{ color }}>{SHAPE_GLYPH[TYPE_SHAPES[type]]}</span>
+        <span className="mono font-semibold text-xs" style={{ color }}>{title}</span>
       </div>
-      <p className="text-[11px] text-white/40">{desc}</p>
+      <p className="text-sm soft">{desc}</p>
     </div>
   );
 }
