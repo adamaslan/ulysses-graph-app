@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import UlyssesGraph from './components/UlyssesGraph';
+import { useMediaQuery } from './hooks';
+import { SHEET_PEEK_SHARE as PEEK_SHARE } from './components/NodePanel';
 import { NODES, EDGES, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES } from './data/graphData';
 
 const COUNTS = NODES.reduce((acc, n) => {
@@ -52,29 +54,81 @@ function useGraphControls() {
   };
 }
 
+function LayerChips({ controls }) {
+  return LAYERS.map(l => (
+    <button key={l.id} onClick={() => controls.chooseLayer(l.id)} className="chip shrink-0"
+      aria-pressed={controls.layer === l.id}>
+      {l.label}
+    </button>
+  ));
+}
+
+function TypeChips({ controls }) {
+  return [null, ...controls.types].map(f => (
+    <button key={f ?? 'all'} onClick={() => controls.setFilterType(f)} className="chip"
+      aria-pressed={controls.filterType === f} style={f ? { '--accent': TYPE_COLORS[f] } : undefined}>
+      {f ? TYPE_LABELS[f] + 's' : 'All'}
+    </button>
+  ));
+}
+
+function WeightSlider({ controls }) {
+  return (
+    <label className="flex items-center gap-2 mono text-xs soft"
+      title="Hide co-occurrence edges shared by fewer passages than this">
+      co-occurs ≥ {controls.minWeight}
+      <input type="range" min="1" max="8" value={controls.minWeight}
+        onChange={e => controls.setMinWeight(Number(e.target.value))} className="w-28" />
+    </label>
+  );
+}
+
 function Controls({ controls, compact = false }) {
-  const { layer, filterType, minWeight, types, chooseLayer, setFilterType, setMinWeight } = controls;
   return (
     <div className={`flex items-center gap-2 flex-wrap ${compact ? 'justify-center' : ''}`}>
       {!compact && <span className="eyebrow mr-1">Layer</span>}
-      {LAYERS.map(l => (
-        <button key={l.id} onClick={() => chooseLayer(l.id)} className="chip" aria-pressed={layer === l.id}>
-          {l.label}
-        </button>
-      ))}
+      <LayerChips controls={controls} />
       <span className="mx-1 soft" aria-hidden="true">·</span>
-      {[null, ...types].map(f => (
-        <button key={f ?? 'all'} onClick={() => setFilterType(f)} className="chip"
-          aria-pressed={filterType === f} style={f ? { '--accent': TYPE_COLORS[f] } : undefined}>
-          {f ? TYPE_LABELS[f] + 's' : 'All'}
-        </button>
-      ))}
-      <label className="flex items-center gap-2 mono text-xs soft ml-2"
-        title="Hide co-occurrence edges shared by fewer passages than this">
-        co-occurs ≥ {minWeight}
-        <input type="range" min="1" max="8" value={minWeight}
-          onChange={e => setMinWeight(Number(e.target.value))} className="w-24" />
-      </label>
+      <TypeChips controls={controls} />
+      <span className="ml-2"><WeightSlider controls={controls} /></span>
+    </div>
+  );
+}
+
+/** Phone layout: the graph fills the screen; filters live in a sheet. */
+function MobileApp({ controls, theme, cycleTheme }) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  return (
+    <div className="canvas flex flex-col" style={{ height: '100dvh', paddingTop: 'env(safe-area-inset-top)' }}>
+      <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: 'var(--rule)' }}>
+        <h1 className="title text-xl m-0 mr-auto">Ulysses</h1>
+        <button className="chip" onClick={cycleTheme} aria-label="Change colour theme">{theme}</button>
+        <button className="chip" onClick={() => setFiltersOpen(true)}>Filters</button>
+      </div>
+      <div className="flex gap-2 px-3 py-2 overflow-x-auto border-b" style={{ borderColor: 'var(--rule)' }}>
+        <LayerChips controls={controls} />
+      </div>
+      <div className="relative flex-1 min-h-0">
+        <UlyssesGraph
+          filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight}
+          isMobile sheetInset={PEEK_SHARE * window.innerHeight}
+        />
+      </div>
+      {filtersOpen && (
+        <div className="fixed inset-0 z-40" onClick={() => setFiltersOpen(false)}>
+          <div className="panel fixed inset-x-0 bottom-0 rounded-b-none rounded-t-xl p-4 flex flex-col gap-3"
+            style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="eyebrow">Show</div>
+            <div className="flex flex-wrap gap-2"><TypeChips controls={controls} /></div>
+            <WeightSlider controls={controls} />
+            {controls.types.includes('motif') && (
+              <p className="mono text-xs m-0" style={{ color: 'var(--warn)' }}>{MOTIF_NOTE}</p>
+            )}
+            <button className="chip self-start" onClick={() => setFiltersOpen(false)}>Done</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -83,12 +137,15 @@ export default function App() {
   const controls = useGraphControls();
   const [theme, cycleTheme] = useTheme();
   const [fullscreen, setFullscreen] = useState(false);
+  const isMobile = useMediaQuery('(max-width: 640px)');
   const graph = (
     <UlyssesGraph filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight} />
   );
   const themeButton = (
     <button onClick={cycleTheme} className="chip" aria-label="Change colour theme">Theme: {theme}</button>
   );
+
+  if (isMobile) return <MobileApp controls={controls} theme={theme} cycleTheme={cycleTheme} />;
 
   if (fullscreen) {
     return (

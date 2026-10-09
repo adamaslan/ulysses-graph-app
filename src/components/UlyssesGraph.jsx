@@ -57,7 +57,31 @@ function buildAdjacency(edges) {
   return adjacency;
 }
 
-export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 }) {
+const TOUCH_HIT_RADIUS = 22;      // px; a fingertip is wider than a 4px node
+const SELECTION_FIT_PADDING = 56; // px of breathing room around a zoomed selection
+const SELECTION_MAX_ZOOM = 2.2;
+
+/** Zoom `svg` so the given nodes fill the area above `bottomInset` px (the sheet). */
+function fitNodes(svg, zoom, nodes, W, H, bottomInset = 0) {
+  if (!nodes.length) return;
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
+  const [y0, y1] = [Math.min(...ys), Math.max(...ys)];
+  const availH = Math.max(120, H - bottomInset);
+  const k = Math.min(
+    SELECTION_MAX_ZOOM,
+    (W - SELECTION_FIT_PADDING * 2) / Math.max(1, x1 - x0),
+    (availH - SELECTION_FIT_PADDING * 2) / Math.max(1, y1 - y0),
+  );
+  const scale = Math.max(0.3, k);
+  const transform = d3.zoomIdentity
+    .translate(W / 2, availH / 2)
+    .scale(scale)
+    .translate(-(x0 + x1) / 2, -(y0 + y1) / 2);
+  svg.transition().duration(450).call(zoom.transform, transform);
+}
+
+export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3, isMobile = false, sheetInset = 0 }) {
   const svgRef       = useRef(null);
   const nodeGroupRef = useRef(null);
   const linkRef      = useRef(null);
@@ -67,6 +91,9 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
   const zoomRef       = useRef(1);
   const focusRef      = useRef(new Set());
   const searchRef     = useRef('');
+  const zoomBehaviorRef = useRef(null);
+  const mobileRef     = useRef({ isMobile, sheetInset });
+  mobileRef.current = { isMobile, sheetInset };
   const [selected, setSelected] = useState(null);
   const [neighbors, setNeighbors] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -197,11 +224,18 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
     const g = svg.append('g');
 
     zoomRef.current = 1;
-    svg.call(d3.zoom().scaleExtent([0.3, 4]).on('zoom', e => {
+    const zoom = d3.zoom().scaleExtent([0.3, 4]).on('zoom', e => {
       g.attr('transform', e.transform);
       zoomRef.current = e.transform.k;
       updateLabels();
-    }));
+    });
+    zoomBehaviorRef.current = zoom;
+    svg.call(zoom).on('dblclick.zoom', null);
+    svg.on('dblclick', e => {
+      // Double-tap empty canvas to zoom in; nodes handle their own taps.
+      if (e.target !== svgRef.current) return;
+      svg.transition().duration(250).call(zoom.scaleBy, 1.8, d3.pointer(e, svgRef.current));
+    });
 
     // Data clones
     const nodes = filteredNodes.map(d => ({ ...d }));
@@ -247,11 +281,20 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
       .attr('role', 'button')
       .attr('aria-label', d => `${TYPE_LABELS[d.type]}: ${d.label}`)
       .call(d3.drag()
+        // Touch pans the canvas instead of dragging a node; mouse still drags nodes.
+        .filter(e => !e.button && !e.type.startsWith('touch'))
         .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
         .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
         .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
       );
     nodeGroupRef.current = nodeGroup;
+
+    // Oversized invisible target so a fingertip can hit small nodes.
+    nodeGroup.append('circle')
+      .attr('class', 'hit')
+      .attr('r', d => Math.max(radius(d), TOUCH_HIT_RADIUS))
+      .attr('fill', 'transparent')
+      .attr('pointer-events', 'all');
 
     // Static halo, hidden until the node is the focus of a selection.
     nodeGroup.append('path')
@@ -312,6 +355,11 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
       nodeGroup.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 
+    sim.on('end.fit', () => {
+      sim.on('end.fit', null);
+      if (mobileRef.current.isMobile) fitNodes(svg, zoom, nodes, W, H);
+    });
+
     updateLabels();
     return () => { sim.stop(); };
   }, [filteredNodes, filteredEdges, updateLabels]);
@@ -332,6 +380,36 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
     );
   }, [selected, applySelection, clearSelection]);
 
+  // On phones, bring the selection into view above the sheet.
+  useEffect(() => {
+    if (!selected || !mobileRef.current.isMobile || !zoomBehaviorRef.current) return;
+    const container = svgRef.current.parentElement;
+    const ids = new Set([selected.id, ...(adjacencyRef.current.get(selected.id) ?? [])]);
+    fitNodes(
+      d3.select(svgRef.current), zoomBehaviorRef.current,
+      nodesRef.current.filter(n => ids.has(n.id)),
+      container.clientWidth, container.clientHeight, mobileRef.current.sheetInset,
+    );
+  }, [selected]);
+
+  // Keep the canvas and layout centre in step with the container (rotation, resize).
+  useEffect(() => {
+    const container = svgRef.current.parentElement;
+    const observer = new ResizeObserver(() => {
+      const W = container.clientWidth;
+      const H = container.clientHeight;
+      d3.select(svgRef.current).attr('width', W).attr('height', H);
+      const sim = simRef.current;
+      if (!sim || !W || !H) return;
+      sim.force('center', d3.forceCenter(W / 2, H / 2))
+        .force('x', d3.forceX(W / 2).strength(0.045))
+        .force('y', d3.forceY(H / 2).strength(0.045))
+        .alpha(0.15).restart();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
   // Search highlight
   useEffect(() => {
     if (!nodeGroupRef.current) return;
@@ -348,12 +426,13 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
   return (
     <div className="relative w-full h-full canvas">
       {/* Search */}
-      <div className="absolute top-3 left-3 z-20">
+      <div className={`absolute top-3 left-3 z-20 ${isMobile ? 'right-24' : ''}`}>
         <input
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
           placeholder="Search nodes"
-          className="input w-52"
+          className={`input ${isMobile ? 'w-full' : 'w-52'}`}
+          type="search"
         />
       </div>
 
@@ -362,6 +441,7 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
       {/* Detail panel */}
       {selected && (
         <NodePanel
+          mobile={isMobile}
           node={selected}
           neighbors={neighbors}
           onSelect={setSelected}
