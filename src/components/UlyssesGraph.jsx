@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import * as d3 from 'd3';
 import NodePanel from './NodePanel';
-import { NODES, EDGES, DEGREE, LAYERS, TYPE_COLORS, TYPE_LABELS } from '../data/graphData';
+import { NODES, EDGES, DEGREE, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES, HOLLOW_TYPES, tint } from '../data/graphData';
 
-// Edge visual states. Idle edges are barely-there cyan traces; connected edges
-// blaze in the selected node's own hue.
-const EDGE_IDLE   = '#00f0ff20';
-const EDGE_DIMMED  = '#00f0ff08';
-const EDGE_COOCCUR = '#ff2bd61c';   // derived co-occurrence: present, but quieter than structural edges
-const EDGE_HIERARCHY = '#ff9f1a40'; // sub-theme and part membership
+// Edge visual states. Idle edges are quiet ink traces; connected edges take the
+// selected node's family color. Derived co-occurrence is quieter than structure.
+const EDGE_IDLE      = 'var(--edge)';
+const EDGE_DIMMED    = 'var(--edge-dim)';
+const EDGE_COOCCUR   = 'var(--edge-co)';
+const EDGE_HIERARCHY = 'var(--edge-hier)';
 
 const idleStroke = d => {
   if (d.kind === 'co_occurs') return EDGE_COOCCUR;
@@ -22,7 +22,19 @@ const radiusOf = d => Math.min(17, 4 + Math.sqrt(DEGREE.get(d.id) || 1) * 1.5) +
 /** Minimum degree a node needs for its label to show at a given zoom level. */
 const labelMinDegree = k => (k > 2.4 ? 0 : k > 1.6 ? 6 : 16);
 
-const DIM_OPACITY = 0.12;
+const DIM_OPACITY = 0.15;
+
+const SHAPE_TYPES = { circle: d3.symbolCircle, diamond: d3.symbolDiamond, square: d3.symbolSquare };
+
+/** Path for a node's body or halo; `grow` adds to the radius so the halo can sit outside it. */
+const shapePath = (d, grow = 0) => {
+  const r = radiusOf(d) + grow;
+  const shape = TYPE_SHAPES[d.type];
+  const area = Math.PI * r * r * (shape === 'diamond' ? 1.35 : shape === 'square' ? 0.9 : 1);
+  return d3.symbol(SHAPE_TYPES[shape], area)();
+};
+
+const restFill = d => (HOLLOW_TYPES.has(d.type) ? 'var(--paper)' : tint(TYPE_COLORS[d.type], 28));
 
 const edgeId = (d, end) => (typeof d[end] === 'object' ? d[end].id : d[end]);
 
@@ -118,39 +130,32 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
     };
 
     link
-      .attr('stroke', d => (isConnected(d) ? accent : EDGE_DIMMED))
-      .attr('stroke-width', d => (isConnected(d) ? 2 : 1))
-      .attr('stroke-opacity', d => (isConnected(d) ? 0.95 : 1))
-      .attr('filter', d => (isConnected(d) ? 'url(#neon)' : null))
-      .attr('stroke-dasharray', d => (isConnected(d) ? '6 6' : null))
-      .classed('edge-flow', isConnected);
+      .style('stroke', d => (isConnected(d) ? accent : EDGE_DIMMED))
+      .attr('stroke-width', d => (isConnected(d) ? 1.75 : 1));
 
     nodeGroup.attr('opacity', d =>
       d.id === focusId || linked.has(d.id) ? 1 : DIM_OPACITY
     );
 
     nodeGroup.select('.node-body')
-      .attr('stroke', d => (d.id === focusId ? '#ffffff' : TYPE_COLORS[d.type]))
+      .style('stroke', d => (d.id === focusId ? 'var(--ink)' : TYPE_COLORS[d.type]))
       .attr('stroke-width', d => {
         if (d.id === focusId) return 3;
-        return linked.has(d.id) ? 2.5 : 1.5;
+        return linked.has(d.id) ? 2 : 1.5;
       })
-      .attr('fill', d => {
-        if (d.id === focusId) return TYPE_COLORS[d.type] + 'aa';
-        return linked.has(d.id) ? TYPE_COLORS[d.type] + '44' : TYPE_COLORS[d.type] + '18';
-      })
-      .attr('filter', d =>
-        d.id === focusId || linked.has(d.id) ? 'url(#neon)' : null
-      );
+      .style('fill', d => {
+        if (d.id === focusId) return TYPE_COLORS[d.type];
+        return linked.has(d.id) ? tint(TYPE_COLORS[d.type], 55) : restFill(d);
+      });
 
-    // Halo ring pulses only around the focused node.
+    // A static ring marks the focused node: the "you are here" marker.
     nodeGroup.select('.halo')
       .attr('opacity', d => (d.id === focusId ? 1 : 0))
-      .attr('stroke', accent);
+      .style('stroke', accent);
 
     nodeGroup.select('text')
-      .attr('fill', d => (d.id === focusId ? '#ffffff' : TYPE_COLORS[d.type]))
-      .attr('font-weight', d => (d.id === focusId || linked.has(d.id) ? 700 : 400));
+      .style('fill', d => (d.id === focusId || linked.has(d.id) ? 'var(--ink)' : 'var(--ink-soft)'))
+      .attr('font-weight', d => (d.id === focusId || linked.has(d.id) ? 600 : 400));
     updateLabels();
   }, [neighborsOf, updateLabels]);
 
@@ -162,22 +167,17 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
 
     focusRef.current = new Set();
     link
-      .attr('stroke', idleStroke)
-      .attr('stroke-width', 1)
-      .attr('stroke-opacity', 1)
-      .attr('filter', null)
-      .attr('stroke-dasharray', null)
-      .classed('edge-flow', false);
+      .style('stroke', idleStroke)
+      .attr('stroke-width', 1);
 
     nodeGroup.attr('opacity', 1);
     nodeGroup.select('.node-body')
-      .attr('stroke', d => TYPE_COLORS[d.type])
+      .style('stroke', d => TYPE_COLORS[d.type])
       .attr('stroke-width', 1.5)
-      .attr('fill', d => TYPE_COLORS[d.type] + '18')
-      .attr('filter', null);
+      .style('fill', restFill);
     nodeGroup.select('.halo').attr('opacity', 0);
     nodeGroup.select('text')
-      .attr('fill', d => TYPE_COLORS[d.type])
+      .style('fill', 'var(--ink-soft)')
       .attr('font-weight', 400);
     updateLabels();
   }, [updateLabels]);
@@ -193,36 +193,6 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
     const svg = d3.select(svgRef.current)
       .attr('width', W)
       .attr('height', H);
-
-    // ── Defs: neon bloom filter + grid pattern ───────────────────────────────
-    const defs = svg.append('defs');
-
-    const neon = defs.append('filter')
-      .attr('id', 'neon')
-      .attr('x', '-80%').attr('y', '-80%')
-      .attr('width', '260%').attr('height', '260%');
-    neon.append('feGaussianBlur').attr('stdDeviation', '3.5').attr('result', 'blur1');
-    neon.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '8').attr('result', 'blur2');
-    const neonMerge = neon.append('feMerge');
-    neonMerge.append('feMergeNode').attr('in', 'blur2');
-    neonMerge.append('feMergeNode').attr('in', 'blur1');
-    neonMerge.append('feMergeNode').attr('in', 'SourceGraphic');
-
-    const grid = defs.append('pattern')
-      .attr('id', 'cybergrid')
-      .attr('width', 40).attr('height', 40)
-      .attr('patternUnits', 'userSpaceOnUse');
-    grid.append('path')
-      .attr('d', 'M40 0 L0 0 0 40')
-      .attr('fill', 'none')
-      .attr('stroke', '#00f0ff')
-      .attr('stroke-opacity', 0.06)
-      .attr('stroke-width', 1);
-
-    svg.append('rect')
-      .attr('width', W).attr('height', H)
-      .attr('fill', 'url(#cybergrid)')
-      .attr('pointer-events', 'none');
 
     const g = svg.append('g');
 
@@ -263,7 +233,7 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
       .selectAll('line')
       .data(edges)
       .join('line')
-      .attr('stroke', idleStroke)
+      .style('stroke', idleStroke)
       .attr('stroke-width', 1)
       .attr('stroke-linecap', 'round');
     linkRef.current = link;
@@ -283,20 +253,20 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
       );
     nodeGroupRef.current = nodeGroup;
 
-    // Pulsing halo, hidden until the node is the focus of a selection.
-    nodeGroup.append('circle')
-      .attr('class', 'halo node-halo')
-      .attr('r', d => radius(d) + 8)
+    // Static halo, hidden until the node is the focus of a selection.
+    nodeGroup.append('path')
+      .attr('class', 'halo')
+      .attr('d', d => shapePath(d, 5))
       .attr('fill', 'none')
-      .attr('stroke-width', 1.5)
+      .attr('stroke-width', 2)
       .attr('opacity', 0)
       .attr('pointer-events', 'none');
 
-    nodeGroup.append('circle')
+    nodeGroup.append('path')
       .attr('class', 'node-body')
-      .attr('r', radius)
-      .attr('fill', d => TYPE_COLORS[d.type] + '18')
-      .attr('stroke', d => TYPE_COLORS[d.type])
+      .attr('d', d => shapePath(d))
+      .style('fill', restFill)
+      .style('stroke', d => TYPE_COLORS[d.type])
       .attr('stroke-width', 1.5)
       .attr('stroke-dasharray', d => (d.thin ? '2 2' : null));
 
@@ -305,10 +275,12 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
       .text(d => d.type === 'episode' ? d.number || d.label : d.label)
       .attr('text-anchor', 'middle')
       .attr('dy', d => -radius(d) - 6)
-      .attr('font-size', d => d.type === 'episode' ? 9 : 8)
-      .attr('font-family', 'ui-monospace, Consolas, monospace')
-      .attr('letter-spacing', '0.5')
-      .attr('fill', d => TYPE_COLORS[d.type])
+      .attr('font-size', d => d.type === 'episode' ? 11 : 10)
+      .attr('font-family', 'var(--mono)')
+      .style('fill', 'var(--ink-soft)')
+      .style('paint-order', 'stroke')
+      .style('stroke', 'var(--paper)')
+      .attr('stroke-width', 3)
       .attr('pointer-events', 'none');
 
     // Toggle selection on a node; used by both pointer and keyboard activation.
@@ -374,19 +346,18 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3 
   }, [searchTerm, updateLabels]);
 
   return (
-    <div className="relative w-full h-full cyber-canvas">
+    <div className="relative w-full h-full canvas">
       {/* Search */}
       <div className="absolute top-3 left-3 z-20">
         <input
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
-          placeholder="> search nodes"
-          className="cyber-input text-xs px-3 py-1.5 w-52"
+          placeholder="Search nodes"
+          className="input w-52"
         />
       </div>
 
       <svg ref={svgRef} className="w-full h-full relative z-10" />
-      <div className="scanlines" />
 
       {/* Detail panel */}
       {selected && (

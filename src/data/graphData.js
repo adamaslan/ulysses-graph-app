@@ -3,18 +3,32 @@
 import { NODES as BASE_NODES, EDGES as BASE_EDGES } from './baseData';
 import expansion from './expansion.json';
 
+/** Ten node types share five color families; shape tells types apart inside a family. */
 export const TYPE_COLORS = {
-  episode:        '#ffd400',  // acid yellow
-  character:      '#00f0ff',  // cyan
-  theme:          '#ff2bd6',  // magenta
-  place:          '#39ff88',  // toxic green
-  part:           '#ff9f1a',  // amber
-  motif:          '#ff5c7a',  // hot coral
-  analysis:       '#b388ff',  // violet
-  technique:      '#7cf5ff',  // ice
-  correspondence: '#5b9bff',  // blue
-  schema:         '#c6ff3d',  // lime
+  episode:        'var(--fam-text)',
+  part:           'var(--fam-text)',
+  character:      'var(--fam-people)',
+  theme:          'var(--fam-ideas)',
+  motif:          'var(--fam-ideas)',
+  place:          'var(--fam-places)',
+  analysis:       'var(--fam-apparatus)',
+  technique:      'var(--fam-apparatus)',
+  correspondence: 'var(--fam-apparatus)',
+  schema:         'var(--fam-apparatus)',
 };
+
+/** circle | diamond | square — see STYLE-GUIDE.md §1.3. */
+export const TYPE_SHAPES = {
+  episode: 'circle', part: 'circle', character: 'circle', theme: 'circle',
+  motif: 'diamond', place: 'square',
+  analysis: 'square', technique: 'square', correspondence: 'square', schema: 'square',
+};
+
+/** Types drawn as an outline only, so they read as structure rather than content. */
+export const HOLLOW_TYPES = new Set(['part', 'analysis']);
+
+/** Mix a CSS color with transparency, e.g. tint('var(--fam-people)', 40). */
+export const tint = (color, percent) => `color-mix(in srgb, ${color} ${percent}%, transparent)`;
 
 export const TYPE_LABELS = {
   episode: 'Episode', character: 'Character', theme: 'Theme', place: 'Place',
