@@ -5,6 +5,10 @@ import {
   NODES, EDGES, DEGREE, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES, HOLLOW_TYPES,
   layerFor, loadCorpus, nodeOf, tint,
 } from '../data/graphData';
+import {
+  SPREAD_MIN, SPREAD_MAX, SPREAD_DEFAULT, LAYOUT_PRESETS, applySpacing, applyPreset, linkDistanceFor,
+} from '../graph/forces';
+import { loadPins, savePins, loadSpread, saveSpread, layoutToJson, parseLayout } from '../graph/pins';
 
 // Edge visual states. Idle edges are quiet ink traces; connected edges take the
 // selected node's family color. Derived co-occurrence is quieter than structure.
@@ -32,6 +36,12 @@ const SEARCH_MIN_CHARS = 3;      // passage search starts at this many character
 const SEARCH_NODE_RESULTS = 8;
 const SEARCH_PASSAGE_RESULTS = 6;
 const SNIPPET_SIDE = 50;
+const LONG_PRESS_MS = 350;       // hold this long on a node to pick it up on touch
+const LONG_PRESS_SLOP_PX = 8;    // moving further than this first means "pan", not "hold"
+const DOUBLE_TAP_MS = 300;
+const KNOWN_POSITION_SHARE = 0.6; // above this, a rebuild is a gentle settle, not a fresh layout
+const SETTLE_ALPHA = 0.3;
+const NEW_NODE_JITTER_PX = 4;
 
 const hashId = () => new URLSearchParams(window.location.hash.slice(1)).get('n');
 
@@ -123,11 +133,32 @@ export default function UlyssesGraph({
   const [trail, setTrail] = useState([]);
   const [edgeInfo, setEdgeInfo] = useState(null);
   const [focusedType, setFocusedType] = useState(null);
+  const [spread, setSpread] = useState(() => loadSpread(SPREAD_DEFAULT));
+  const [preset, setPreset] = useState('free');
+  const [frozen, setFrozen] = useState(false);
+  const [pinCount, setPinCount] = useState(0);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const selectedRef   = useRef(null);
   const neighborsRef  = useRef([]);
   const pendingRef    = useRef(hashId());
   const cycleRef      = useRef({ landed: null, list: [], index: -1 });
   const revealRef     = useRef(onReveal);
+  const positionsRef  = useRef(new Map());   // last known x/y per node id, kept across rebuilds
+  const pinnedRef     = useRef(new Map());   // id → {x, y} for nodes the reader placed
+  const spreadRef     = useRef(spread);
+  const presetRef     = useRef(preset);
+  const frozenRef     = useRef(frozen);
+  const layerRef      = useRef(layer);
+  const labelBucketRef = useRef(null);
+  const layoutRef     = useRef(null);        // re-applies preset + spacing to the live simulation
+  const reloadPinsRef = useRef(null);
+  const unpinRef      = useRef(null);        // (id | null) → unpin one node, or all
+  const suppressClickRef = useRef(false);
+  const importInputRef = useRef(null);
+  spreadRef.current = spread;
+  presetRef.current = preset;
+  frozenRef.current = frozen;
+  layerRef.current = layer;
   selectedRef.current = selected;
   neighborsRef.current = neighbors;
   revealRef.current = onReveal;
@@ -182,6 +213,10 @@ export default function UlyssesGraph({
     const nodeGroup = nodeGroupRef.current;
     if (!nodeGroup) return;
     const minDegree = labelMinDegree(zoomRef.current);
+    if (labelBucketRef.current !== minDegree) {
+      labelBucketRef.current = minDegree;
+      layoutRef.current?.({ reheat: false });
+    }
     const term = searchRef.current;
     nodeGroup.select('text').attr('display', d =>
       (DEGREE.get(d.id) ?? 0) >= minDegree || focusRef.current.has(d.id) || (term && d.label.toLowerCase().includes(term))
@@ -269,6 +304,7 @@ export default function UlyssesGraph({
     const H = container.clientHeight;
 
     setSelected(null);
+    setFrozen(false);
     d3.select(svgRef.current).selectAll('*').remove();
 
     const svg = d3.select(svgRef.current)
@@ -291,31 +327,72 @@ export default function UlyssesGraph({
       svg.transition().duration(250).call(zoom.scaleBy, 1.8, d3.pointer(e, svgRef.current));
     });
 
-    // Data clones
+    // Data clones. Nodes that were on screen before keep their position, so a filter
+    // change settles the layout instead of scrambling it.
+    const adjacency = buildAdjacency(filteredEdges);
+    const known = positionsRef.current;   // stable Map: also used by the cleanup below
     const nodes = filteredNodes.map(d => ({ ...d }));
+    const knownShare = nodes.filter(n => known.has(n.id)).length / Math.max(1, nodes.length);
+    nodes.forEach((n, i) => {
+      const at = known.get(n.id);
+      if (at) { n.x = at.x; n.y = at.y; return; }
+      if (knownShare === 0) return;
+      const placed = [...(adjacency.get(n.id) ?? [])].map(id => known.get(id)).filter(Boolean);
+      const home = placed.length
+        ? { x: d3.mean(placed, p => p.x), y: d3.mean(placed, p => p.y) }
+        : { x: W / 2, y: H / 2 };
+      n.x = home.x + ((i % 7) - 3) * NEW_NODE_JITTER_PX;
+      n.y = home.y + ((i % 5) - 2) * NEW_NODE_JITTER_PX;
+    });
     const edges = filteredEdges.map(d => ({ ...d }));
-    adjacencyRef.current = buildAdjacency(filteredEdges);
+    adjacencyRef.current = adjacency;
     nodesRef.current = nodes;
 
     const radius = radiusOf;
+    const byId = new Map(nodes.map(n => [n.id, n]));
 
-    // Forces tuned for ~230 nodes / ~1,600 edges: weaker charge and shorter links
-    // than the original 58-node layout, weight-scaled link strength so
-    // co-occurrence edges pull gently, and a mild pull to the centre so
-    // unconnected clusters do not drift off screen.
+    // Pins the reader placed on this layer and preset become fixed positions.
+    const pinNode = (n, at) => { n.fx = at.x; n.fy = at.y; n.x = at.x; n.y = at.y; };
+    const loadPinsInto = () => {
+      pinnedRef.current = loadPins(layerRef.current, presetRef.current);
+      for (const [id, at] of pinnedRef.current) { const n = byId.get(id); if (n) pinNode(n, at); }
+      setPinCount(pinnedRef.current.size);
+    };
+    loadPinsInto();
+
+    // Link strength is weight-scaled so co-occurrence edges pull gently. Distances,
+    // repulsion, collision and the positioning forces are set by applyLayout below.
     const dense = nodes.length > 100;
     const sim = d3.forceSimulation(nodes)
       .force('link', d3.forceLink(edges).id(d => d.id)
-        .distance(dense ? 75 : 80)
+        .distance(linkDistanceFor)
         .strength(d => (d.kind === 'co_occurs' ? 0.05 : 0.3) + Math.min(0.15, (d.weight ?? 1) * 0.02)))
-      .force('charge', d3.forceManyBody().strength(dense ? -260 : -180).distanceMax(700))
-      .force('center', d3.forceCenter(W / 2, H / 2))
-      .force('x', d3.forceX(W / 2).strength(0.045))
-      .force('y', d3.forceY(H / 2).strength(0.045))
-      .force('collision', d3.forceCollide().radius(d => radius(d) + 4))
+      .force('charge', d3.forceManyBody().distanceMax(700))
+      .force('collision', d3.forceCollide())
       .alphaDecay(0.03)
       .velocityDecay(0.4);
+    if (knownShare > KNOWN_POSITION_SHARE) sim.alpha(SETTLE_ALPHA);
     simRef.current = sim;
+
+    const applyLayout = ({ reheat = true } = {}) => {
+      const { clientWidth: cw, clientHeight: ch } = container;
+      applySpacing(sim, {
+        spread: spreadRef.current, dense, radiusOf: radius,
+        labelMinDegree: labelMinDegree(zoomRef.current),
+      });
+      applyPreset(sim, presetRef.current, {
+        nodes, adjacency, W: cw || W, H: ch || H, spread: spreadRef.current,
+        isPinned: id => pinnedRef.current.has(id),
+      });
+      if (reheat && !frozenRef.current) sim.alpha(Math.max(sim.alpha(), 0.4)).restart();
+    };
+    layoutRef.current = applyLayout;
+    applyLayout({ reheat: false });
+    reloadPinsRef.current = () => {
+      for (const n of nodes) { n.fx = null; n.fy = null; }
+      loadPinsInto();
+      markPins();
+    };
 
     const linkHit = g.append('g')
       .selectAll('line')
@@ -336,7 +413,68 @@ export default function UlyssesGraph({
       .attr('stroke-linecap', 'round');
     linkRef.current = link;
 
-    const nodeGroup = g.append('g')
+    // ── Moving and pinning ──────────────────────────────────────────────────
+    // A dragged node keeps its place (fx/fy stay set) and is remembered as a pin.
+    // Shift-drag moves the node's direct neighbours with it.
+    let nodeGroup = null;
+    let dragGroup = [];
+    let dragMoved = false;
+    const render = () => {
+      linkHit
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      link
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      nodeGroup.attr('transform', d => `translate(${d.x},${d.y})`);
+    };
+    const markPins = () => nodeGroup?.select('.pin-mark').attr('opacity', d => (pinnedRef.current.has(d.id) ? 1 : 0));
+    const persistPins = () => {
+      savePins(layerRef.current, presetRef.current, pinnedRef.current);
+      setPinCount(pinnedRef.current.size);
+      markPins();
+    };
+    const beginDrag = (d, withNeighbours) => {
+      const family = withNeighbours ? nodes.filter(n => n !== d && adjacency.get(d.id)?.has(n.id)) : [];
+      dragGroup = [d, ...family].map(n => ({
+        n, dx: n.x - d.x, dy: n.y - d.y, prevFx: n.fx, prevFy: n.fy,
+      }));
+      dragMoved = false;
+      if (!frozenRef.current) sim.alphaTarget(0.3).restart();
+      for (const m of dragGroup) { m.n.fx = m.n.x; m.n.fy = m.n.y; }
+    };
+    const moveDrag = (d, x, y) => {
+      dragMoved = true;
+      for (const m of dragGroup) {
+        m.n.fx = x + m.dx; m.n.fy = y + m.dy;
+        if (frozenRef.current) { m.n.x = m.n.fx; m.n.y = m.n.fy; }
+      }
+      if (frozenRef.current) render();
+    };
+    const endDrag = () => {
+      if (!frozenRef.current) sim.alphaTarget(0);
+      for (const m of dragGroup) {
+        if (!dragMoved) { m.n.fx = m.prevFx; m.n.fy = m.prevFy; continue; } // a plain click is not a pin
+        pinnedRef.current.set(m.n.id, { x: m.n.fx, y: m.n.fy });
+      }
+      if (dragMoved) persistPins();
+      dragGroup = [];
+    };
+    const unpin = id => {
+      const targets = id ? [byId.get(id)] : nodes;
+      for (const n of targets) {
+        if (!n) continue;
+        n.fx = null; n.fy = null;
+        pinnedRef.current.delete(n.id);
+      }
+      // "Unpin all" also drops pins on nodes a filter is hiding, or they'd return pinned.
+      if (!id) pinnedRef.current.clear();
+      persistPins();
+      applyLayout();   // re-anchors timeline episodes and reheats
+    };
+    unpinRef.current = unpin;
+
+    nodeGroup = g.append('g')
       .selectAll('g')
       .data(nodes)
       .join('g')
@@ -345,11 +483,11 @@ export default function UlyssesGraph({
       .attr('role', 'button')
       .attr('aria-label', d => `${TYPE_LABELS[d.type]}: ${d.label}`)
       .call(d3.drag()
-        // Touch pans the canvas instead of dragging a node; mouse still drags nodes.
+        // Touch pans the canvas; a long press (below) picks a node up. Mouse drags directly.
         .filter(e => !e.button && !e.type.startsWith('touch'))
-        .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-        .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
-        .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+        .on('start', (e, d) => beginDrag(d, e.sourceEvent?.shiftKey))
+        .on('drag', (e, d) => moveDrag(d, e.x, e.y))
+        .on('end', () => endDrag())
       );
     nodeGroupRef.current = nodeGroup;
 
@@ -377,6 +515,17 @@ export default function UlyssesGraph({
       .attr('stroke-width', 1.5)
       .attr('stroke-dasharray', d => (d.thin ? '2 2' : null));
 
+    nodeGroup.append('circle')
+      .attr('class', 'pin-mark')
+      .attr('r', 3)
+      .attr('cx', d => radius(d) * 0.75)
+      .attr('cy', d => -radius(d) * 0.75)
+      .style('fill', 'var(--ink)')
+      .style('stroke', 'var(--paper)')
+      .attr('stroke-width', 1)
+      .attr('opacity', d => (pinnedRef.current.has(d.id) ? 1 : 0))
+      .attr('pointer-events', 'none');
+
     nodeGroup.append('text')
       .attr('class', 'node-label')
       .text(d => d.type === 'episode' ? d.number || d.label : d.label)
@@ -395,10 +544,61 @@ export default function UlyssesGraph({
     // reacts to `selected` and does the actual graph painting.
     const selectNode = d => choose(selectedRef.current?.id === d.id ? null : d);
 
+    // A second tap on a pinned node lets it go. (dblclick is unreliable on touch.)
+    let lastTap = { id: null, at: 0 };
     nodeGroup.on('click', (e, d) => {
       e.stopPropagation();
+      if (suppressClickRef.current) return;
+      const now = Date.now();
+      const isSecondTap = lastTap.id === d.id && now - lastTap.at < DOUBLE_TAP_MS;
+      lastTap = { id: d.id, at: now };
+      if (isSecondTap && pinnedRef.current.has(d.id)) { unpin(d.id); return; }
       selectNode(d);
     });
+
+    // Touch: one finger pans; holding a node for LONG_PRESS_MS picks it up to move.
+    const toGraph = touch => {
+      const [x, y] = d3.zoomTransform(svgRef.current)
+        .invert(d3.pointer(touch, svgRef.current));
+      return { x, y };
+    };
+    let press = null;
+    const cancelPress = () => { if (press) clearTimeout(press.timer); press = null; };
+    nodeGroup.on('touchstart.press', (e, d) => {
+      cancelPress();
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      press = {
+        d, from: [touch.clientX, touch.clientY], held: false,
+        timer: setTimeout(() => {
+          press.held = true;
+          navigator.vibrate?.(10);
+          beginDrag(d, false);
+        }, LONG_PRESS_MS),
+      };
+    }, { passive: true });
+    nodeGroup.on('touchmove.press', e => {
+      if (!press) return;
+      const touch = e.touches[0];
+      if (!press.held) {
+        const moved = Math.hypot(touch.clientX - press.from[0], touch.clientY - press.from[1]);
+        if (moved > LONG_PRESS_SLOP_PX) cancelPress();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();           // keep the canvas from panning while a node is held
+      const at = toGraph(touch);
+      moveDrag(press.d, at.x, at.y);
+    }, { passive: false });
+    const releasePress = () => {
+      if (press?.held) {
+        endDrag();
+        suppressClickRef.current = true;
+        setTimeout(() => { suppressClickRef.current = false; }, 0);
+      }
+      cancelPress();
+    };
+    nodeGroup.on('touchend.press touchcancel.press', releasePress);
 
     nodeGroup.on('keydown', (e, d) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -410,15 +610,7 @@ export default function UlyssesGraph({
 
     svg.on('click', () => choose(null));
 
-    sim.on('tick', () => {
-      linkHit
-        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-      link
-        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-      nodeGroup.attr('transform', d => `translate(${d.x},${d.y})`);
-    });
+    sim.on('tick', render);
 
     sim.on('end.fit', () => {
       sim.on('end.fit', null);
@@ -436,8 +628,12 @@ export default function UlyssesGraph({
       else if (target) revealRef.current?.(layerFor(target.type));
       else pendingRef.current = null;
     }
-    return () => { sim.stop(); };
-  }, [filteredNodes, filteredEdges, updateLabels, choose]);
+    return () => {
+      for (const n of nodes) known.set(n.id, { x: n.x, y: n.y });
+      cancelPress();
+      sim.stop();
+    };
+  }, [filteredNodes, filteredEdges, layer, updateLabels, choose]);
 
   // Paint the current selection. Runs as a side effect of `selected` changing
   // (never inside the setSelected updater itself, which must stay pure).
@@ -474,16 +670,60 @@ export default function UlyssesGraph({
       const W = container.clientWidth;
       const H = container.clientHeight;
       d3.select(svgRef.current).attr('width', W).attr('height', H);
-      const sim = simRef.current;
-      if (!sim || !W || !H) return;
-      sim.force('center', d3.forceCenter(W / 2, H / 2))
-        .force('x', d3.forceX(W / 2).strength(0.045))
-        .force('y', d3.forceY(H / 2).strength(0.045))
-        .alpha(0.15).restart();
+      if (!simRef.current || !W || !H) return;
+      layoutRef.current?.();
     });
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
+
+  // Spread: retune the live simulation. Rebuilding would throw every position away.
+  useEffect(() => {
+    saveSpread(spread);
+    layoutRef.current?.();
+  }, [spread]);
+
+  // Layout preset: pins belong to a preset, so swap them along with the forces.
+  const firstPresetRun = useRef(true);
+  useEffect(() => {
+    if (firstPresetRun.current) { firstPresetRun.current = false; return; }
+    reloadPinsRef.current?.();
+    layoutRef.current?.();
+  }, [preset]);
+
+  // Freeze: stop the simulation so only the dragged node moves.
+  useEffect(() => {
+    const sim = simRef.current;
+    if (!sim) return;
+    if (frozen) sim.stop();
+    else sim.alpha(0.3).restart();
+  }, [frozen]);
+
+  const exportLayout = () => {
+    const svg = svgRef.current;
+    const t = d3.zoomTransform(svg);
+    const blob = new Blob([layoutToJson({
+      layer, preset, spread, pins: pinnedRef.current, zoom: { x: t.x, y: t.y, k: t.k },
+    })], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `ulysses-layout-${layer}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const importLayout = async file => {
+    const layout = file && parseLayout(await file.text());
+    if (!layout) { window.alert('That file is not a Ulysses graph layout.'); return; }
+    savePins(layer, layout.preset, layout.pins);
+    if (Number.isFinite(layout.spread)) setSpread(Math.min(SPREAD_MAX, Math.max(SPREAD_MIN, layout.spread)));
+    if (layout.preset !== presetRef.current) setPreset(layout.preset);
+    else { reloadPinsRef.current?.(); layoutRef.current?.(); }
+    const { x, y, k } = layout.zoom ?? {};
+    if ([x, y, k].every(Number.isFinite) && zoomBehaviorRef.current) {
+      d3.select(svgRef.current).call(zoomBehaviorRef.current.transform, d3.zoomIdentity.translate(x, y).scale(k));
+    }
+  };
 
   // Back/forward follow the URL hash; Esc clears; ← → step through the selection's neighbours.
   useEffect(() => {
@@ -496,6 +736,7 @@ export default function UlyssesGraph({
       if (isTyping(e.target)) return;
       if (e.key === 'Escape') { choose(null); return; }
       const current = selectedRef.current;
+      if (current && (e.key === 'u' || e.key === 'U')) { unpinRef.current?.(current.id); return; }
       if (!current || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
       // Keep cycling the neighbours of the node the walk started from, not of the one just reached.
       const cycle = cycleRef.current;
@@ -591,6 +832,48 @@ export default function UlyssesGraph({
       </div>
 
       <svg ref={svgRef} className="w-full h-full relative z-10" />
+
+      {/* Layout tools */}
+      <div className={`absolute z-30 flex flex-col gap-2 ${isMobile ? 'right-3 top-14 items-end' : 'left-3 bottom-3 items-start'}`}>
+        <button className="chip" aria-pressed={toolsOpen} onClick={() => setToolsOpen(o => !o)}>
+          Layout{pinCount ? ` · ${pinCount} pinned` : ''}
+        </button>
+        {toolsOpen && (
+          <div className="panel p-3 flex flex-col gap-3 text-sm" style={{ maxWidth: 'min(18rem, 90vw)' }}>
+            <label className="flex items-center gap-2 mono text-xs soft"
+              title="Push nodes apart or pull them together">
+              Spread {spread.toFixed(1)}×
+              <input type="range" min={SPREAD_MIN} max={SPREAD_MAX} step="0.1" value={spread}
+                onChange={e => setSpread(Number(e.target.value))} className="w-28" />
+            </label>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Arrangement">
+              {LAYOUT_PRESETS.map(p => (
+                <button key={p.id} className="chip" aria-pressed={preset === p.id} onClick={() => setPreset(p.id)}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="chip" aria-pressed={frozen} onClick={() => setFrozen(f => !f)}
+                title="Stop the layout moving; only the node you drag moves">
+                Freeze
+              </button>
+              <button className="chip" disabled={!pinCount} onClick={() => unpinRef.current?.(null)}
+                title="Release every pinned node. The rest still drift toward the middle.">
+                Unpin all
+              </button>
+              <button className="chip" onClick={exportLayout}>Export</button>
+              <button className="chip" onClick={() => importInputRef.current?.click()}>Import</button>
+              <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden"
+                onChange={e => { importLayout(e.target.files?.[0]); e.target.value = ''; }} />
+            </div>
+            <p className="mono text-[11px] soft m-0">
+              Drop a node to pin it · double-tap a pinned node or press U to release
+              {isMobile ? ' · hold a node to move it' : ' · Shift-drag moves its neighbours too'}
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* Detail panel */}
       {selected && (
