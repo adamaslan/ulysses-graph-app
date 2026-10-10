@@ -467,6 +467,8 @@ export default function UlyssesGraph({
         n.fx = null; n.fy = null;
         pinnedRef.current.delete(n.id);
       }
+      // "Unpin all" also drops pins on nodes a filter is hiding, or they'd return pinned.
+      if (!id) pinnedRef.current.clear();
       persistPins();
       applyLayout();   // re-anchors timeline episodes and reheats
     };

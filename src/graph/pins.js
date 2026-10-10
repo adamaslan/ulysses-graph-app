@@ -1,4 +1,5 @@
 import { NODES } from '../data/graphData';
+import { LAYOUT_PRESETS } from './forces';
 
 export const LAYOUT_VERSION = 1;
 const PINS_KEY = (layer, preset) => `ulysses-pins:${layer}:${preset}`;
@@ -56,7 +57,7 @@ export const layoutToJson = ({ layer, preset, spread, pins, zoom }) =>
 export function parseLayout(text) {
   try {
     const data = JSON.parse(text);
-    if (data?.v !== LAYOUT_VERSION || typeof data.preset !== 'string') return null;
+    if (data?.v !== LAYOUT_VERSION || !LAYOUT_PRESETS.some(({ id }) => id === data.preset)) return null;
     return { ...data, pins: cleanPins(data.pins) };
   } catch { return null; }
 }
