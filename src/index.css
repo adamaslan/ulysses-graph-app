@@ -126,3 +126,15 @@ input[type="range"] { accent-color: var(--ink-soft); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
 }
+
+/* Tagged names inside quotes: a dotted underline in the target node's family color. */
+.inline-link {
+  all: unset;
+  cursor: pointer;
+  text-decoration: underline dotted var(--accent, var(--ink));
+  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+}
+.inline-link:hover, .inline-link:focus-visible { background: color-mix(in srgb, var(--accent, var(--ink)) 16%, transparent); }
+button.legend-card { font: inherit; color: inherit; cursor: pointer; width: 100%; }
+button.legend-card:hover { border-color: var(--accent); }

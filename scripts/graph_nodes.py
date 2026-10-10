@@ -200,3 +200,39 @@ ESSAYS = {
 # Nodes whose names appear only in the pasted commentary, never in a quoted
 # Joyce passage, so no episode can be derived from the text. Linked by hand.
 MANUAL_EPS = {"virag": [15], "davy_byrnes": [8], "bella_house": [15], "shelter": [16]}
+
+# Character pairs with a named relationship. A pair is written to the graph only
+# if some Joyce passage in the notes names both, and that passage's id is stored
+# on the edge as its evidence. a, b, label.
+RELATIONSHIPS = [
+    ("bloom", "molly", "married"),
+    ("molly", "boylan", "affair"),
+    ("bloom", "boylan", "rival"),
+    ("bloom", "stephen", "surrogate father and son"),
+    ("bloom", "rudy", "father and dead son"),
+    ("bloom", "milly", "father and daughter"),
+    ("bloom", "virag", "son and father"),
+    ("bloom", "martha", "secret correspondents"),
+    ("bloom", "citizen", "antagonists"),
+    ("bloom", "bella", "Bella and Bello humiliate him"),
+    ("stephen", "simon", "son and father"),
+    ("stephen", "mulligan", "friend turned usurper"),
+    ("stephen", "deasy", "employee and employer"),
+    ("stephen", "haines", "colonial guest"),
+    ("stephen", "lynch", "companions in Nighttown"),
+    ("molly", "milly", "mother and daughter"),
+    ("gerty", "cissy", "friends"),
+    ("gerty", "edy", "friends"),
+    ("simon", "dollard", "singers at the Ormond"),
+    ("douce", "kennedy", "barmaids"),
+    ("zoe", "bella", "work in the same house"),
+]
+
+# Inline-link blocklist: ids whose regex also matches an ordinary word.
+INLINE_SKIP = {"bloom", "power", "shelter", "carriage", "newspaper", "bullock", "carr", "key"}
+
+# Episodes in book order, for `next` edges and first-seen ordering.
+EPISODE_ORDER = list(range(1, 19))
+
+ECHO_MIN_SHARED = 4
+ECHO_PER_EPISODE = 3
