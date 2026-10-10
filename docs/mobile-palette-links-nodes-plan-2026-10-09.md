@@ -1,6 +1,14 @@
 # Ulysses Graph: mobile, calmer colors, more clickable, more links, richer nodes
 
-*Written 2026-10-09. This is a plan. Nothing in it has been built yet.*
+*Written 2026-10-09.*
+
+**Status (2026-10-09).** Phases 1–2 shipped in #6. Phases 3–5 are built on `feat/links-clickable-passages`, as one PR rather than three. Not done:
+
+- **Phase 6 (notes backfill)** is editorial work in `ulysses-yas/build_atlas.py` (a different repo): deciding what each of the 316 unused lines is. Left for a person.
+- `of` on analyses (§4.1 `analyzes`, `analyzed_by`) needs an `of` field in the `build_atlas.py` opts, so it waits on phase 6.
+- Not built: `flagged_from`, motif→motif edges, hand-picked episode key lines, analysis sentences on character and theme nodes, double-tap to zoom a neighborhood, hover tooltips, and "passages only as neighbors" on phones.
+- `ATLAS_URL` in `NodePanel.jsx` is empty until the Quote Atlas has a stable URL; block references become links once it is set.
+- Relationship pairs with no passage naming both are dropped by the build (7 of 21 today), so the list can be re-run as the notes grow.
 
 This plan covers five changes to the app:
 

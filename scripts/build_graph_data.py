@@ -24,6 +24,9 @@ YAS = Path(os.environ.get("ULYSSES_YAS", Path.home() / "code/homebase/ulysses-ya
 OUT_DIR = APP / "src" / "data"
 COOCCUR_MIN_WEIGHT = int(os.environ.get("COOCCUR_MIN_WEIGHT", "2"))
 COOCCUR_EXCLUDE = {"bloom"}  # present in almost every block: an edge to everything says nothing
+KWIC_SIDE = 80
+KWIC_PER_MOTIF = 40
+SPEAKER_LINE_MAX = 220
 MOTIF_SOLID_EPISODES = 4
 MOTIF_MIN_EPISODES = 2
 ANALYSIS_MENTION_MIN = 3
@@ -126,6 +129,54 @@ def load_motifs(blocks: list[dict], joyce: list[dict]) -> tuple[list[dict], dict
     return nodes, rules
 
 
+def find_links(paras: list[str], patterns: dict[str, re.Pattern[str]]) -> list:
+    """First match of each node per paragraph, as [[para, [[start, end, id], ...]], ...]."""
+    out = []
+    for index, para in enumerate(paras):
+        spans = []
+        for nid, pattern in patterns.items():
+            match = pattern.search(para)
+            if match:
+                spans.append((match.start(), match.end(), nid))
+        spans.sort()
+        kept, last_end = [], -1
+        for start, end, nid in spans:
+            if start >= last_end:
+                kept.append([start, end, nid])
+                last_end = end
+        if kept:
+            out.append([index, kept])
+    return out
+
+
+def find_speakers(paras: list[str], character_rx: dict[str, re.Pattern[str]]) -> list:
+    """Speaker lines (BLOOM: ...) as [[character id, para, line], ...]."""
+    out = []
+    for index, para in enumerate(paras):
+        for line in para.split("\n"):
+            match = ba.SPEAKER.match(line.strip())
+            if not match:
+                continue
+            name = match.group(1).strip().lower()
+            owner = next((cid for cid, pattern in character_rx.items() if pattern.fullmatch(name)), None)
+            if owner:
+                text = " ".join(line.split())
+                out.append([owner, index, text[:SPEAKER_LINE_MAX]])
+    return out
+
+
+def keyword_in_context(pattern: re.Pattern[str], hit_blocks: list[dict]) -> list:
+    """[[block id, before, hit, after], ...] for a motif, in book order, capped."""
+    rows = []
+    for block in hit_blocks:
+        text = " ".join(block_text(block).split())
+        for match in pattern.finditer(text):
+            before = text[max(0, match.start() - KWIC_SIDE):match.start()]
+            after = text[match.end():match.end() + KWIC_SIDE]
+            rows.append([block["id"], before, match.group(0), after])
+    return rows[:KWIC_PER_MOTIF]
+
+
 def main() -> None:
     blocks = build_blocks()
     by_id = {b["id"]: b for b in blocks}
@@ -161,6 +212,21 @@ def main() -> None:
         text = block_text(block)
         tags[block["id"]] = {nid for nid, c in compiled.items() if c.search(text)}
 
+    inline_rx = {nid: compiled[nid] for nid, t in node_type.items()
+                 if t in ("character", "place", "motif") and nid not in G.INLINE_SKIP}
+    inline_text_rx = {nid: c for nid, c in inline_rx.items() if node_type[nid] != "motif"}
+    character_rx = {nid: compiled[nid] for nid, t in node_type.items() if t == "character"}
+    for block in blocks:
+        patterns = inline_rx if block["kind"] == "q" else inline_text_rx
+        links = find_links(block["paras"], patterns)
+        if links:
+            block["links"] = links
+        if block["kind"] == "q":
+            speakers = find_speakers(block["paras"], character_rx)
+            if speakers:
+                block["speakers"] = speakers
+    book_order = {b["id"]: i for i, b in enumerate(blocks)}
+
     quotes_for: dict[str, list[str]] = defaultdict(list)
     notes_for: dict[str, list[str]] = defaultdict(list)
     for block in joyce + commentary:
@@ -173,17 +239,28 @@ def main() -> None:
 
     nodes: list[dict] = []
     edges: list[dict] = []
-    seen: set[tuple] = set()
 
-    def edge(source: str, target: str, kind: str, weight: int = 1) -> None:
+    by_pair: dict[tuple, dict] = {}
+
+    def edge(source: str, target: str, kind: str, weight: int = 1, **extra) -> bool:
+        """Add an edge, or merge extra fields into the pair's existing one (its kind and weight win).
+
+        Returns True if the edge was newly written.
+        """
         key = (min(source, target), max(source, target))
-        if source == target or key in seen:
-            return
-        seen.add(key)
+        extras = {k: v for k, v in extra.items() if v}
+        if source == target:
+            return False
+        if key in by_pair:
+            by_pair[key].update(extras)
+            return False
         record = {"source": source, "target": target, "kind": kind}
         if weight > 1:
             record["weight"] = weight
+        record.update(extras)
+        by_pair[key] = record
         edges.append(record)
+        return True
 
     # ---- overlay: attach text to the 58 existing nodes ----------------------------
     overlay: dict[str, dict] = {}
@@ -240,8 +317,11 @@ def main() -> None:
         edge(child, parent, "child_of")
 
     # ---- motifs -----------------------------------------------------------------------------
+    kwic: dict[str, list] = {}
     for motif in motif_nodes:
         motif["quotes"] = quotes_for.get(motif["id"], [])
+        kwic[motif["id"]] = keyword_in_context(
+            compiled[motif["id"]], [by_id[b] for b in motif["quotes"]])
         nodes.append(motif)
         for ep, count in sorted(derived_episodes(motif["id"]).items()):
             edge(motif["id"], f"ep{ep:02d}", "recurs_in", count)
@@ -287,17 +367,70 @@ def main() -> None:
             if count >= ANALYSIS_MENTION_MIN:
                 edge(nid, target, "discusses", count)
 
+    # ---- episode order, echoes, relationships, speakers -------------------------------------
+    for a, b in zip(G.EPISODE_ORDER, G.EPISODE_ORDER[1:]):
+        edge(f"ep{a:02d}", f"ep{b:02d}", "next")
+
+    echo_types = {"character", "place", "motif"}
+    episode_tags: dict[int, set[str]] = defaultdict(set)
+    for block in joyce:
+        episode_tags[block["ep"]] |= {n for n in tags[block["id"]]
+                                      if node_type[n] in echo_types and n not in COOCCUR_EXCLUDE}
+    echo_pairs = sorted(
+        ((len(episode_tags[a] & episode_tags[b]), a, b)
+         for a, b in combinations(sorted(episode_tags), 2)
+         if len(episode_tags[a] & episode_tags[b]) >= G.ECHO_MIN_SHARED),
+        reverse=True)
+    echo_used: Counter = Counter()
+    echoes = 0
+    for count, a, b in echo_pairs:
+        if echo_used[a] >= G.ECHO_PER_EPISODE or echo_used[b] >= G.ECHO_PER_EPISODE:
+            continue
+        shared = sorted(episode_tags[a] & episode_tags[b])
+        if edge(f"ep{a:02d}", f"ep{b:02d}", "echoes", count, shared=shared[:14]):
+            echo_used[a] += 1
+            echo_used[b] += 1
+            echoes += 1
+
+    dropped_pairs = []
+    for a, b, label in G.RELATIONSHIPS:
+        evidence = next((blk["id"] for blk in joyce if a in tags[blk["id"]] and b in tags[blk["id"]]), None)
+        if evidence is None:
+            dropped_pairs.append((a, b))
+            continue
+        edge(a, b, "relationship", 1, label=label, evidence=evidence)
+
+    speaker_counts: Counter = Counter()
+    for block in joyce:
+        for cid, _para, _line in block.get("speakers", []):
+            speaker_counts[(cid, block["ep"])] += 1
+    for (cid, ep), count in sorted(speaker_counts.items()):
+        edge(cid, f"ep{ep:02d}", "speaks_in", count, speaks=count)
+
+    # ---- passages: each Joyce quote as a node, linked to its episode and the nodes it names ----
+    for block in joyce:
+        pid = f"p-{block['id']}"
+        nodes.append({"id": pid, "type": "passage", "label": block["label"], "block": block["id"],
+                      "ep": block["ep"],
+                      "summary": f"A passage of Joyce’s text quoted in the notes, from episode {block['ep']}."})
+        edge(pid, f"ep{block['ep']:02d}", "in")
+        for nid in sorted(tags[block["id"]]):
+            if nid not in COOCCUR_EXCLUDE:
+                edge(pid, nid, "mentions")
+
     # ---- co-occurrence: nodes tagged on the same Joyce passage -------------------------------------------------
     pair_types = {"character", "theme", "place", "motif"}
     pair_counts: Counter = Counter()
+    pair_blocks: dict[tuple[str, str], list[str]] = defaultdict(list)
     for block in joyce:
         present = sorted(n for n in tags[block["id"]] if node_type[n] in pair_types and n not in COOCCUR_EXCLUDE)
         for a, b in combinations(present, 2):
             pair_counts[(a, b)] += 1
+            pair_blocks[(a, b)].append(block["id"])
     cooccur = [(a, b, w) for (a, b), w in pair_counts.items() if w >= COOCCUR_MIN_WEIGHT]
     cooccur.sort(key=lambda r: -r[2])
     for a, b, w in cooccur:
-        edge(a, b, "co_occurs", w)
+        edge(a, b, "co_occurs", w, blocks=pair_blocks[(a, b)][:12])
 
     for node in nodes:
         if node["type"] in ("character", "place", "theme") and not node.get("quotes"):
@@ -305,7 +438,7 @@ def main() -> None:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / "corpus.json").write_text(json.dumps({
-        "source": "notes-from-notes-app.md", "blocks": blocks,
+        "source": "notes-from-notes-app.md", "blocks": blocks, "kwic": kwic,
         "appendix": [{"slug": i["slug"], "title": i["title"], "reason": i["reason"],
                       "paras": render_paragraphs(ba.source_lines([r for _k, _l, rs, _o in i["blocks"] for r in rs]))}
                      for i in ba.HARD_ITEMS if i["tag"] == "Unmapped notes"],
@@ -319,6 +452,8 @@ def main() -> None:
     print(f"blocks: {len(blocks)} ({Counter(b['kind'] for b in blocks)})")
     print(f"new nodes: {len(nodes)} {dict(types)}")
     print(f"new edges: {len(edges)} {dict(kinds)}")
+    print(f"echoes: {echoes}; relationships dropped for lack of evidence: {dropped_pairs}")
+    print(f"speaker lines: {sum(speaker_counts.values())} across {len({c for c, _ in speaker_counts})} characters")
     print(f"co-occurrence pairs at weight>={COOCCUR_MIN_WEIGHT}: {len(cooccur)} "
           f"(of {len(pair_counts)} pairs seen)")
 

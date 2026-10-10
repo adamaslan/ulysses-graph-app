@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import * as d3 from 'd3';
-import NodePanel from './NodePanel';
-import { NODES, EDGES, DEGREE, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES, HOLLOW_TYPES, tint } from '../data/graphData';
+import NodePanel, { EdgeCard } from './NodePanel';
+import {
+  NODES, EDGES, DEGREE, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES, HOLLOW_TYPES,
+  layerFor, loadCorpus, nodeOf, tint,
+} from '../data/graphData';
 
 // Edge visual states. Idle edges are quiet ink traces; connected edges take the
 // selected node's family color. Derived co-occurrence is quieter than structure.
@@ -23,6 +26,23 @@ const radiusOf = d => Math.min(17, 4 + Math.sqrt(DEGREE.get(d.id) || 1) * 1.5) +
 const labelMinDegree = k => (k > 2.4 ? 0 : k > 1.6 ? 6 : 16);
 
 const DIM_OPACITY = 0.15;
+const TRAIL_KEEP = 5;            // breadcrumb length
+const EDGE_HIT_WIDTH = 12;       // px; an edge is a thin line to tap
+const SEARCH_MIN_CHARS = 3;      // passage search starts at this many characters
+const SEARCH_NODE_RESULTS = 8;
+const SEARCH_PASSAGE_RESULTS = 6;
+const SNIPPET_SIDE = 50;
+
+const hashId = () => new URLSearchParams(window.location.hash.slice(1)).get('n');
+
+/** Put the selected node in the URL so a selection can be shared and Back undoes it. */
+function writeHash(id) {
+  const want = id ? `#n=${id}` : '';
+  if (window.location.hash === want || (!want && !window.location.hash)) return;
+  window.history.pushState(null, '', want || window.location.pathname + window.location.search);
+}
+
+const isTyping = target => ['INPUT', 'TEXTAREA'].includes(target?.tagName);
 
 const SHAPE_TYPES = { circle: d3.symbolCircle, diamond: d3.symbolDiamond, square: d3.symbolSquare };
 
@@ -81,7 +101,9 @@ function fitNodes(svg, zoom, nodes, W, H, bottomInset = 0) {
   svg.transition().duration(450).call(zoom.transform, transform);
 }
 
-export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3, isMobile = false, sheetInset = 0 }) {
+export default function UlyssesGraph({
+  filterType, layer = 'all', minWeight = 3, isMobile = false, sheetInset = 0, onReveal,
+}) {
   const svgRef       = useRef(null);
   const nodeGroupRef = useRef(null);
   const linkRef      = useRef(null);
@@ -97,6 +119,37 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
   const [selected, setSelected] = useState(null);
   const [neighbors, setNeighbors] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [passageResults, setPassageResults] = useState([]);
+  const [trail, setTrail] = useState([]);
+  const [edgeInfo, setEdgeInfo] = useState(null);
+  const [focusedType, setFocusedType] = useState(null);
+  const selectedRef   = useRef(null);
+  const neighborsRef  = useRef([]);
+  const pendingRef    = useRef(hashId());
+  const cycleRef      = useRef({ landed: null, list: [], index: -1 });
+  const revealRef     = useRef(onReveal);
+  selectedRef.current = selected;
+  neighborsRef.current = neighbors;
+  revealRef.current = onReveal;
+
+  /** Select a node (or clear with null), keeping the trail and the URL hash in step. */
+  const choose = useCallback((node, { updateHash = true } = {}) => {
+    setEdgeInfo(null);
+    setFocusedType(null);
+    setSelected(node);
+    if (node) setTrail(t => [...t.filter(id => id !== node.id), node.id].slice(-TRAIL_KEEP));
+    if (updateHash) writeHash(node?.id ?? null);
+  }, []);
+
+  /** Select by id. A node outside the current layer asks the app to switch layers first. */
+  const selectById = useCallback((id, options) => {
+    const target = nodeOf(id);
+    if (!target) return;
+    const onScreen = nodesRef.current.find(n => n.id === id);
+    if (onScreen) { choose(onScreen, options); return; }
+    pendingRef.current = id;
+    revealRef.current?.(layerFor(target.type));
+  }, [choose]);
 
   // The layer picks which node types are on screen. A filtered category keeps
   // its own nodes plus every node one edge away, so cross-type relationships
@@ -140,20 +193,21 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
    * Paint the full selection state: the clicked node, its direct neighbours and
    * every edge between them stay lit; everything else fades back.
    */
-  const applySelection = useCallback((nodeData) => {
+  const applySelection = useCallback((nodeData, onlyType = null) => {
     const nodeGroup = nodeGroupRef.current;
     const link = linkRef.current;
     if (!nodeGroup || !link) return;
 
     const focusId = nodeData.id;
-    const linked = neighborsOf(focusId);
+    const allLinked = neighborsOf(focusId);
+    const linked = onlyType ? new Set([...allLinked].filter(id => nodeOf(id)?.type === onlyType)) : allLinked;
     const accent = TYPE_COLORS[nodeData.type];
     focusRef.current = new Set([focusId, ...linked]);
 
     const isConnected = d => {
       const sid = edgeId(d, 'source');
       const tid = edgeId(d, 'target');
-      return sid === focusId || tid === focusId;
+      return (sid === focusId && linked.has(tid)) || (tid === focusId && linked.has(sid));
     };
 
     link
@@ -263,6 +317,16 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
       .velocityDecay(0.4);
     simRef.current = sim;
 
+    const linkHit = g.append('g')
+      .selectAll('line')
+      .data(edges)
+      .join('line')
+      .attr('stroke', 'transparent')
+      .attr('stroke-width', EDGE_HIT_WIDTH)
+      .attr('pointer-events', 'stroke')
+      .attr('cursor', 'help')
+      .on('click', (e, d) => { e.stopPropagation(); setSelected(null); setEdgeInfo(d); });
+
     const link = g.append('g')
       .selectAll('line')
       .data(edges)
@@ -329,9 +393,7 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
     // Toggle selection on a node; used by both pointer and keyboard activation.
     // The updater stays pure (no D3 mutation inside it) — the effect below
     // reacts to `selected` and does the actual graph painting.
-    const selectNode = d => {
-      setSelected(prev => (prev?.id === d.id ? null : d));
-    };
+    const selectNode = d => choose(selectedRef.current?.id === d.id ? null : d);
 
     nodeGroup.on('click', (e, d) => {
       e.stopPropagation();
@@ -346,9 +408,12 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
       }
     });
 
-    svg.on('click', () => setSelected(null));
+    svg.on('click', () => choose(null));
 
     sim.on('tick', () => {
+      linkHit
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
       link
         .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
         .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
@@ -361,8 +426,18 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
     });
 
     updateLabels();
+
+    // A selection requested by the URL or a search result waits here for its layer to load.
+    const wanted = pendingRef.current;
+    if (wanted) {
+      const target = nodeOf(wanted);
+      const onScreen = nodes.find(n => n.id === wanted);
+      if (onScreen) { pendingRef.current = null; choose(onScreen); }
+      else if (target) revealRef.current?.(layerFor(target.type));
+      else pendingRef.current = null;
+    }
     return () => { sim.stop(); };
-  }, [filteredNodes, filteredEdges, updateLabels]);
+  }, [filteredNodes, filteredEdges, updateLabels, choose]);
 
   // Paint the current selection. Runs as a side effect of `selected` changing
   // (never inside the setSelected updater itself, which must stay pure).
@@ -372,13 +447,13 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
       setNeighbors([]);
       return;
     }
-    applySelection(selected);
+    applySelection(selected, focusedType);
     setNeighbors(
       nodesRef.current.filter(
         n => n.id !== selected.id && adjacencyRef.current.get(selected.id)?.has(n.id)
       )
     );
-  }, [selected, applySelection, clearSelection]);
+  }, [selected, focusedType, applySelection, clearSelection]);
 
   // On phones, bring the selection into view above the sheet.
   useEffect(() => {
@@ -410,10 +485,37 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
     return () => observer.disconnect();
   }, []);
 
+  // Back/forward follow the URL hash; Esc clears; ← → step through the selection's neighbours.
+  useEffect(() => {
+    const onPop = () => {
+      const id = hashId();
+      if (id) selectById(id, { updateHash: false });
+      else choose(null, { updateHash: false });
+    };
+    const onKey = e => {
+      if (isTyping(e.target)) return;
+      if (e.key === 'Escape') { choose(null); return; }
+      const current = selectedRef.current;
+      if (!current || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+      // Keep cycling the neighbours of the node the walk started from, not of the one just reached.
+      const cycle = cycleRef.current;
+      if (cycle.landed !== current.id) Object.assign(cycle, { list: neighborsRef.current, index: -1 });
+      if (!cycle.list.length) return;
+      e.preventDefault();
+      const step = e.key === 'ArrowRight' ? 1 : -1;
+      cycle.index = (cycle.index + step + cycle.list.length) % cycle.list.length;
+      cycle.landed = cycle.list[cycle.index].id;
+      selectById(cycle.landed);
+    };
+    window.addEventListener('popstate', onPop);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('popstate', onPop); window.removeEventListener('keydown', onKey); };
+  }, [choose, selectById]);
+
   // Search highlight
   useEffect(() => {
     if (!nodeGroupRef.current) return;
-    const term = searchTerm.toLowerCase();
+    const term = searchTerm.trim().toLowerCase();
     searchRef.current = term;
     const matches = d => !term || d.label.toLowerCase().includes(term);
     nodeGroupRef.current.select('.node-body')
@@ -423,17 +525,69 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
     updateLabels();
   }, [searchTerm, updateLabels]);
 
+  // Passage search runs over the lazily loaded corpus, so it waits for a few characters.
+  useEffect(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (term.length < SEARCH_MIN_CHARS) { setPassageResults([]); return undefined; }
+    let live = true;
+    loadCorpus().then(corpus => {
+      if (!live) return;
+      const found = [];
+      for (const block of corpus.blocks) {
+        if (block.kind === 'c') continue;
+        const text = block.paras.join(' ').replace(/\s+/g, ' ');
+        const at = text.toLowerCase().indexOf(term);
+        if (at < 0) continue;
+        found.push({
+          nodeId: block.kind === 'q' ? `p-${block.id}` : `an-${block.id}`,
+          label: block.label,
+          snippet: text.slice(Math.max(0, at - SNIPPET_SIDE), at + term.length + SNIPPET_SIDE),
+        });
+        if (found.length >= SEARCH_PASSAGE_RESULTS) break;
+      }
+      setPassageResults(found);
+    });
+    return () => { live = false; };
+  }, [searchTerm]);
+
+  const nodeResults = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return [];
+    return NODES.filter(n => n.type !== 'passage' && n.label.toLowerCase().includes(term))
+      .slice(0, SEARCH_NODE_RESULTS);
+  }, [searchTerm]);
+
+  const openResult = id => { setSearchTerm(''); selectById(id); };
+
   return (
     <div className="relative w-full h-full canvas">
       {/* Search */}
-      <div className={`absolute top-3 left-3 z-20 ${isMobile ? 'right-24' : ''}`}>
+      <div className={`absolute top-3 left-3 z-30 ${isMobile ? 'right-24' : 'w-72'}`}>
         <input
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
-          placeholder="Search nodes"
-          className={`input ${isMobile ? 'w-full' : 'w-52'}`}
+          placeholder="Search nodes and passages"
+          className="input w-full"
           type="search"
         />
+        {(nodeResults.length > 0 || passageResults.length > 0) && (
+          <div className="panel mt-1 max-h-[50vh] overflow-y-auto p-2 text-sm">
+            {nodeResults.length > 0 && <div className="eyebrow mb-1">Nodes</div>}
+            {nodeResults.map(n => (
+              <button key={n.id} className="block w-full text-left py-1.5 min-h-8" onClick={() => openResult(n.id)}>
+                <span style={{ color: TYPE_COLORS[n.type] }}>{n.label}</span>
+                <span className="mono text-[11px] soft"> · {TYPE_LABELS[n.type]}</span>
+              </button>
+            ))}
+            {passageResults.length > 0 && <div className="eyebrow mt-2 mb-1">Passages</div>}
+            {passageResults.map(r => (
+              <button key={r.nodeId} className="block w-full text-left py-1.5" onClick={() => openResult(r.nodeId)}>
+                <span className="mono text-[11px] soft">{r.label}</span>
+                <span className="block italic">…{r.snippet}…</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <svg ref={svgRef} className="w-full h-full relative z-10" />
@@ -444,10 +598,14 @@ export default function UlyssesGraph({ filterType, layer = 'all', minWeight = 3,
           mobile={isMobile}
           node={selected}
           neighbors={neighbors}
-          onSelect={setSelected}
-          onClose={() => setSelected(null)}
+          trail={trail}
+          onSelect={selectById}
+          onClose={() => choose(null)}
+          onFocusGroup={setFocusedType}
+          focusedType={focusedType}
         />
       )}
+      {edgeInfo && <EdgeCard edge={edgeInfo} onSelect={selectById} onClose={() => setEdgeInfo(null)} />}
     </div>
   );
 }

@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import UlyssesGraph from './components/UlyssesGraph';
+import ListView from './components/ListView';
 import { useMediaQuery } from './hooks';
 import { SHEET_PEEK_SHARE as PEEK_SHARE } from './components/NodePanel';
-import { NODES, EDGES, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES } from './data/graphData';
+import {
+  NODES, CORE_NODE_COUNT, CORE_EDGE_COUNT, LAYERS, TYPE_COLORS, TYPE_LABELS, TYPE_SHAPES, layerFor,
+} from './data/graphData';
 
 const COUNTS = NODES.reduce((acc, n) => {
   acc[n.type] = (acc[n.type] || 0) + 1;
@@ -20,6 +23,7 @@ const LEGEND_DESC = {
   technique: 'The style each episode is written in',
   correspondence: 'The Homeric figures',
   schema: 'The Gilbert schema “art” of each episode',
+  passage: 'Each quoted passage, in the Passages layer',
 };
 
 const MOTIF_NOTE =
@@ -50,6 +54,11 @@ function useGraphControls() {
   return {
     layer, filterType, minWeight, types,
     chooseLayer: id => { setLayer(id); setFilterType(null); },
+    /** Filter to one node type, switching layer first if the current one can't show it. */
+    showType: type => {
+      if (!types.includes(type)) setLayer(layerFor(type));
+      setFilterType(type);
+    },
     setFilterType, setMinWeight,
   };
 }
@@ -96,12 +105,13 @@ function Controls({ controls, compact = false }) {
 }
 
 /** Phone layout: the graph fills the screen; filters live in a sheet. */
-function MobileApp({ controls, theme, cycleTheme }) {
+function MobileApp({ controls, theme, cycleTheme, openList }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   return (
     <div className="canvas flex flex-col" style={{ height: '100dvh', paddingTop: 'env(safe-area-inset-top)' }}>
       <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: 'var(--rule)' }}>
         <h1 className="title text-xl m-0 mr-auto">Ulysses</h1>
+        <button className="chip" onClick={openList}>List</button>
         <button className="chip" onClick={cycleTheme} aria-label="Change colour theme">{theme}</button>
         <button className="chip" onClick={() => setFiltersOpen(true)}>Filters</button>
       </div>
@@ -111,6 +121,7 @@ function MobileApp({ controls, theme, cycleTheme }) {
       <div className="relative flex-1 min-h-0">
         <UlyssesGraph
           filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight}
+          onReveal={controls.chooseLayer}
           isMobile sheetInset={PEEK_SHARE * window.innerHeight}
         />
       </div>
@@ -138,14 +149,35 @@ export default function App() {
   const [theme, cycleTheme] = useTheme();
   const [fullscreen, setFullscreen] = useState(false);
   const isMobile = useMediaQuery('(max-width: 640px)');
+  const [view, setView] = useState('graph');
   const graph = (
-    <UlyssesGraph filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight} />
+    <UlyssesGraph filterType={controls.filterType} layer={controls.layer} minWeight={controls.minWeight}
+      onReveal={controls.chooseLayer} />
   );
+  const showOnGraph = id => {
+    window.history.pushState(null, '', `#n=${id}`);
+    setView('graph');
+  };
   const themeButton = (
     <button onClick={cycleTheme} className="chip" aria-label="Change colour theme">Theme: {theme}</button>
   );
 
-  if (isMobile) return <MobileApp controls={controls} theme={theme} cycleTheme={cycleTheme} />;
+  if (view === 'list') {
+    return (
+      <div className="min-h-screen canvas" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+        <div className="flex items-center gap-2 px-4 py-2 border-b" style={{ borderColor: 'var(--rule)' }}>
+          <h1 className="title text-xl m-0 mr-auto">Ulysses, as a list</h1>
+          {themeButton}
+          <button className="chip" onClick={() => setView('graph')}>Graph</button>
+        </div>
+        <ListView onShow={showOnGraph} />
+      </div>
+    );
+  }
+
+  if (isMobile) {
+    return <MobileApp controls={controls} theme={theme} cycleTheme={cycleTheme} openList={() => setView('list')} />;
+  }
 
   if (fullscreen) {
     return (
@@ -168,6 +200,7 @@ export default function App() {
         <h1 className="title text-3xl m-0">Ulysses, as a graph</h1>
         <div className="flex gap-2">
           {themeButton}
+          <button onClick={() => setView('list')} className="chip">List</button>
           <button onClick={() => setFullscreen(true)} className="chip">Fullscreen ↗</button>
         </div>
       </div>
@@ -184,14 +217,18 @@ export default function App() {
           {graph}
         </div>
         <p className="mono text-xs soft mt-3 text-center">
-          {NODES.length} nodes · {EDGES.length} edges · click a node for its quotes and connections · drag · scroll to zoom
+          <button className="underline" onClick={() => setView('list')}>
+            {CORE_NODE_COUNT} nodes · {CORE_EDGE_COUNT} edges
+          </button>
+          {' '}· click a node for its quotes and connections · click an edge to see why it links · drag · scroll to zoom · Esc clears
         </p>
       </div>
 
       <div className="max-w-6xl mx-auto px-4 pb-12 grid grid-cols-2 md:grid-cols-5 gap-3">
         {Object.keys(TYPE_COLORS).map(type => (
           <LegendCard key={type} type={type}
-            title={`${COUNTS[type] ?? 0} ${TYPE_LABELS[type]}s`} desc={LEGEND_DESC[type]} />
+            title={`${COUNTS[type] ?? 0} ${TYPE_LABELS[type]}s`} desc={LEGEND_DESC[type]}
+            onPick={() => controls.showType(type)} />
         ))}
       </div>
     </div>
@@ -200,15 +237,16 @@ export default function App() {
 
 const SHAPE_GLYPH = { circle: '●', diamond: '◆', square: '■' };
 
-function LegendCard({ type, title, desc }) {
+function LegendCard({ type, title, desc, onPick }) {
   const color = TYPE_COLORS[type];
   return (
-    <div className="legend-card" style={{ '--accent': color }}>
+    <button type="button" className="legend-card text-left" style={{ '--accent': color }} onClick={onPick}
+      title={`Show only ${title.toLowerCase()}`}>
       <div className="flex items-center gap-2 mb-1">
         <span aria-hidden="true" style={{ color }}>{SHAPE_GLYPH[TYPE_SHAPES[type]]}</span>
         <span className="mono font-semibold text-xs" style={{ color }}>{title}</span>
       </div>
       <p className="text-sm soft">{desc}</p>
-    </div>
+    </button>
   );
 }
