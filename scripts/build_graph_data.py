@@ -239,18 +239,28 @@ def main() -> None:
 
     nodes: list[dict] = []
     edges: list[dict] = []
-    seen: set[tuple] = set()
 
-    def edge(source: str, target: str, kind: str, weight: int = 1, **extra) -> None:
+    by_pair: dict[tuple, dict] = {}
+
+    def edge(source: str, target: str, kind: str, weight: int = 1, **extra) -> bool:
+        """Add an edge, or merge extra fields into the pair's existing one (its kind and weight win).
+
+        Returns True if the edge was newly written.
+        """
         key = (min(source, target), max(source, target))
-        if source == target or key in seen:
-            return
-        seen.add(key)
+        extras = {k: v for k, v in extra.items() if v}
+        if source == target:
+            return False
+        if key in by_pair:
+            by_pair[key].update(extras)
+            return False
         record = {"source": source, "target": target, "kind": kind}
         if weight > 1:
             record["weight"] = weight
-        record.update({k: v for k, v in extra.items() if v})
+        record.update(extras)
+        by_pair[key] = record
         edges.append(record)
+        return True
 
     # ---- overlay: attach text to the 58 existing nodes ----------------------------
     overlay: dict[str, dict] = {}
@@ -376,11 +386,11 @@ def main() -> None:
     for count, a, b in echo_pairs:
         if echo_used[a] >= G.ECHO_PER_EPISODE or echo_used[b] >= G.ECHO_PER_EPISODE:
             continue
-        echo_used[a] += 1
-        echo_used[b] += 1
         shared = sorted(episode_tags[a] & episode_tags[b])
-        edge(f"ep{a:02d}", f"ep{b:02d}", "echoes", count, shared=shared[:14])
-        echoes += 1
+        if edge(f"ep{a:02d}", f"ep{b:02d}", "echoes", count, shared=shared[:14]):
+            echo_used[a] += 1
+            echo_used[b] += 1
+            echoes += 1
 
     dropped_pairs = []
     for a, b, label in G.RELATIONSHIPS:
