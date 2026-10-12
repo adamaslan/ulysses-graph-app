@@ -1,0 +1,175 @@
+<title>Ulysses Graph Summary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+  /* Layout: single reading column, a stat band, then two paired bar charts, then prose sections. Paper and ink, same tokens as the app's STYLE-GUIDE. */
+  :root {
+    --paper: #f1eee6; --card: #faf8f2; --ink: #1d2328; --ink-soft: #4d555c; --rule: #cfc7b4;
+    --text: #8a6c22; --people: #2f5d62; --ideas: #8a2e2a; --places: #5b6e3a; --apparatus: #5d636b; --warn: #9a5b12;
+    --display: "Cormorant Garamond", "Iowan Old Style", Georgia, serif;
+    --body: "Source Serif 4", Charter, Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #151a1d; --card: #1b2125; --ink: #ebe6d9; --ink-soft: #a7afb3; --rule: #3a4248;
+      --text: #d8b565; --people: #8cc3c4; --ideas: #d98a7e; --places: #a9bf86; --apparatus: #9aa3ab; --warn: #e0b36a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #151a1d; --card: #1b2125; --ink: #ebe6d9; --ink-soft: #a7afb3; --rule: #3a4248;
+    --text: #d8b565; --people: #8cc3c4; --ideas: #d98a7e; --places: #a9bf86; --apparatus: #9aa3ab; --warn: #e0b36a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--paper); color: var(--ink); font: 1.0625rem/1.65 var(--body); }
+  .wrap { max-width: 860px; margin: 0 auto; padding-block: 2.5rem 4rem; padding-inline: 16px; }
+  .eyebrow { font: 500 0.75rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 0.9rem; }
+  h1 { font: 600 clamp(2.4rem, 7vw, 3.8rem)/1.02 var(--display); margin: 0 0 1rem; text-wrap: balance; }
+  h2 { font: 600 1.9rem/1.15 var(--display); margin: 3rem 0 0.8rem; text-wrap: balance; }
+  h3 { font: 500 0.8rem/1.2 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); margin: 0 0 0.6rem; }
+  p { margin: 0 0 1rem; max-width: 65ch; }
+  .lede { font-size: 1.2rem; color: var(--ink-soft); max-width: 60ch; }
+  a { color: var(--ideas); }
+  code, .mono { font-family: var(--mono); font-size: 0.85em; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0; border-block: 2px solid var(--ink); margin: 2rem 0; }
+  .stat { padding: 1rem 1rem 1rem 0; }
+  .stat + .stat { padding-left: 1rem; border-left: 1px solid var(--rule); }
+  .stat b { display: block; font: 600 3rem/1 var(--display); font-variant-numeric: tabular-nums; }
+  .stat span { font: 400 0.78rem/1.4 var(--mono); color: var(--ink-soft); }
+  @media (max-width: 520px) { .stat:nth-child(odd) { padding-left: 0; border-left: 0; } .stat { border-top: 1px solid var(--rule); } }
+
+  .note { background: var(--card); border: 1px solid var(--rule); padding: 0.9rem 1.1rem; margin: 0 0 1.5rem; font-size: 0.95rem; max-width: 65ch; }
+  .note b { font-family: var(--mono); font-size: 0.78rem; color: var(--warn); }
+
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem 2.5rem; }
+  .charts > div { min-width: 0; }
+  .bar { display: grid; grid-template-columns: 8.5rem 1fr 3.2rem; align-items: center; gap: 0.6rem; font: 400 0.8rem/1.9 var(--mono); }
+  .bar .track { height: 0.7rem; background: color-mix(in srgb, var(--rule) 55%, transparent); }
+  .bar .fill { display: block; height: 100%; background: var(--c); }
+  .bar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+  .bar .shape { display: inline-block; width: 0.55rem; height: 0.55rem; margin-right: 0.45rem; background: var(--c); }
+  .bar .shape.circle { border-radius: 50%; }
+  .bar .shape.diamond { transform: rotate(45deg) scale(0.9); }
+  .bar .shape.hollow { background: transparent; border: 1.5px solid var(--c); }
+
+  .hubs { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0; margin: 0 0 1rem; list-style: none; }
+  .hubs li { border: 1px solid var(--rule); background: var(--card); padding: 0.35rem 0.7rem; font: 400 0.8rem/1.3 var(--mono); }
+  .hubs li b { font-weight: 500; color: var(--ideas); }
+
+  .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.8rem; margin: 1rem 0 1.5rem; }
+  .sw { border: 1px solid var(--rule); background: var(--card); padding: 0.8rem; }
+  .sw i { display: block; height: 0.5rem; background: var(--c); margin-bottom: 0.6rem; }
+  .sw strong { display: block; font: 500 0.78rem/1.3 var(--mono); }
+  .sw span { font-size: 0.85rem; color: var(--ink-soft); line-height: 1.4; display: block; }
+
+  .great { display: grid; gap: 1.6rem 2.5rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 1.5rem; }
+  .great > div { min-width: 0; border-top: 2px solid var(--ink); padding-top: 0.8rem; }
+  .great h3 { color: var(--ink); font-size: 0.85rem; }
+  .great p { font-size: 0.97rem; }
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.45rem 0.8rem 0.45rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font: 500 0.75rem/1.2 var(--mono); color: var(--ink-soft); }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule); font: 400 0.78rem/1.6 var(--mono); color: var(--ink-soft); }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">ulysses-graph-app · summary · 12 Oct 2026</p>
+  <h1>The Ulysses Graph</h1>
+  <p class="lede">An interactive force-directed map of James Joyce’s <em>Ulysses</em>. Every episode, character, theme, motif and place is a node. Every quoted passage, technique and correspondence is attached to the ones it touches, and the full text is one click away.</p>
+
+  <div class="stats" role="list">
+    <div class="stat" role="listitem"><b>324</b><span>nodes in total<br>228 core + 96 passages</span></div>
+    <div class="stat" role="listitem"><b>2,491</b><span>intersections (links) in total<br>1,651 among the 228 core nodes</span></div>
+    <div class="stat" role="listitem"><b>841</b><span>co-occurrence links, derived from passages that share two ideas</span></div>
+    <div class="stat" role="listitem"><b>118</b><span>text blocks: 96 Joyce quotes, 15 analyses, 7 commentary notes</span></div>
+  </div>
+  <p class="note"><b>HOW I COUNTED</b><br>I read “intersections” as links between nodes (each unordered pair of nodes counts once). Counts come from running the app’s own <code>graphData.js</code>, so they match what the graph draws. The README says 228 because it counts the core layer only; the Passages layer adds 96 more nodes and 840 more links.</p>
+
+  <h2>What is in it</h2>
+  <div class="charts">
+    <div>
+      <h3>324 nodes by type</h3>
+      <div id="nodes"></div>
+    </div>
+    <div>
+      <h3>2,491 links by kind</h3>
+      <div id="edges"></div>
+    </div>
+  </div>
+
+  <h2>Where the book is densest</h2>
+  <p>Links per node, counting core links only. Circe is the hub of the whole book, and the motifs that run through the night episodes sit right behind it.</p>
+  <ul class="hubs">
+    <li><b>111</b> Circe (ep 15)</li><li><b>74</b> Hands &amp; fingers</li><li><b>65</b> Black &amp; dark</li>
+    <li><b>63</b> Sirens (ep 11)</li><li><b>63</b> Night, moon &amp; lamplight</li><li><b>62</b> Stephen</li>
+    <li><b>57</b> Women</li><li><b>56</b> Eyes &amp; gaze</li><li><b>55</b> Voice &amp; song</li><li><b>52</b> Bloom</li>
+  </ul>
+
+  <h2>The style</h2>
+  <p>Paper and ink. The graph shares its look with the Quote Atlas it was built from: a warm paper ground, near-black ink, and four muted hues for the book’s four kinds of thing. There is no glow, no neon and nothing animating at rest. It replaced an earlier cyberpunk look (kept in <code>docs/archive</code>) because 228 nodes needed calm.</p>
+  <div class="swatches">
+    <div class="sw" style="--c:var(--text)"><i></i><strong>Text · ochre</strong><span>episodes, parts</span></div>
+    <div class="sw" style="--c:var(--people)"><i></i><strong>People · sea green</strong><span>characters</span></div>
+    <div class="sw" style="--c:var(--ideas)"><i></i><strong>Ideas · oxblood</strong><span>themes, motifs</span></div>
+    <div class="sw" style="--c:var(--places)"><i></i><strong>Places · olive</strong><span>places</span></div>
+    <div class="sw" style="--c:var(--apparatus)"><i></i><strong>Apparatus · slate</strong><span>analysis, technique, schema, correspondence</span></div>
+  </div>
+  <div class="great">
+    <div><h3>Colour says family, shape says type</h3><p>Ten node types share five hues. Circles, diamonds and squares, solid or hollow, tell types apart inside a family, so colour is never the only signal.</p></div>
+    <div><h3>Three-tier selection</h3><p>The focused node is solid with a heavy ink outline. Its neighbours are tinted. Everything else drops to 15% opacity. Two functions control the whole effect.</p></div>
+    <div><h3>Type that matches the book</h3><p>Cormorant Garamond for titles, Source Serif 4 for Joyce’s text and summaries, IBM Plex Mono for IDs, page numbers and counts.</p></div>
+    <div><h3>Light, dark and system</h3><p>Every colour is a token defined once. The theme button cycles system, light and dark, and remembers the choice.</p></div>
+  </div>
+
+  <h2>What makes it great</h2>
+  <div class="great">
+    <div><h3>Every link is traceable to the text</h3><p>Nodes are not invented. The 170 added nodes and their links are generated from the notes, and each passage keeps its block ID and source line range (<code>e15q07</code>, <code>L847–863</code>). Click a motif and you can read the exact lines that earned the link.</p></div>
+    <div><h3>It shows the book’s hidden structure</h3><p>Motifs like hands, eyes, music and the colour black cut across episodes that look unrelated. 841 co-occurrence links make those threads visible, and the slider hides the ones shared by only a few passages.</p></div>
+    <div><h3>Five layers keep 324 nodes readable</h3><p>Core, Motifs, Structure, All and Passages each show only the types they need. The default is never the full hairball.</p></div>
+    <div><h3>Honest about its gaps</h3><p>18 nodes have thin evidence and are drawn with a dashed outline. Flagged misfiled passages, such as a Sirens scene earlier filed under Cyclops, are corrected and marked.</p></div>
+    <div><h3>You can rearrange it and keep it that way</h3><p>A Spread slider, drag-to-pin (touch included), Timeline, Radial and cluster presets, and export/import of layouts. Pins survive filter changes and reloads.</p></div>
+    <div><h3>Works on a phone, and without a mouse</h3><p>Nodes are focusable buttons, a list view mirrors the graph for reading, reduced-motion is honoured, and the full corpus loads lazily so the first paint stays light.</p></div>
+  </div>
+
+  <h2>Known limits</h2>
+  <div class="table-scroll"><table>
+    <tr><th>Limit</th><th>Detail</th></tr>
+    <tr><td>No motifs for episodes 6, 7, 9, 10</td><td>The source notes hold no captured Joyce passages for them, so no motif reaches those episodes.</td></tr>
+    <tr><td>Thin nodes</td><td>18 nodes rest on slight evidence and are dashed.</td></tr>
+    <tr><td>Unchecked</td><td>Long-press drag on a real phone, layout export/import and Shift-drag were not tested (per the 10 Oct plan doc).</td></tr>
+    <tr><td>Shipped layouts</td><td>None yet. <code>src/data/layouts/</code> is empty until someone exports and commits one.</td></tr>
+  </table></div>
+
+  <footer>Source: ~/code/ulysses-graph-app (React 19, D3 7, Vite 8) · data from ~/code/homebase/ulysses-yas · branch feat/graph-spacing-pins-layouts · live site deploys to GitHub Pages from main.</footer>
+</div>
+
+<script>
+  const nodes = [
+    ['Passage', 96, 'var(--text)', 'square'], ['Character', 44, 'var(--people)', 'circle'], ['Theme', 44, 'var(--ideas)', 'circle'],
+    ['Motif', 36, 'var(--ideas)', 'diamond'], ['Place', 20, 'var(--places)', 'square'], ['Episode', 18, 'var(--text)', 'circle'],
+    ['Technique', 18, 'var(--apparatus)', 'square'], ['Correspondence', 18, 'var(--apparatus)', 'square'], ['Analysis', 15, 'var(--apparatus)', 'hollow'],
+    ['Schema', 12, 'var(--apparatus)', 'square'], ['Part', 3, 'var(--text)', 'hollow circle'],
+  ];
+  const edges = [
+    ['co-occurs with', 841], ['mentions', 744], ['theme of', 191], ['recurs in', 157], ['discusses', 105], ['quoted from', 96],
+    ['appears in', 85], ['corresponds to', 73], ['relates to', 45], ['sub-theme of', 36], ['set in', 26], ['part of', 18],
+    ['technique of', 18], ['comes before', 17], ['relationship', 14], ['schema of', 12], ['echoes', 10], ['speaks in', 3],
+  ];
+  function render(id, rows, color) {
+    const max = rows[0][1];
+    document.getElementById(id).innerHTML = rows.map(r => {
+      const c = color ? r[2] : 'var(--ink-soft)';
+      const shape = color ? `<span class="shape ${r[3]}" style="--c:${c}"></span>` : '';
+      const n = color ? r[1] : r[1];
+      return `<div class="bar" style="--c:${c}"><span>${shape}${r[0]}</span><span class="track"><span class="fill" style="width:${(n / max * 100).toFixed(1)}%"></span></span><span class="n">${n}</span></div>`;
+    }).join('');
+  }
+  render('nodes', nodes, true);
+  render('edges', edges, false);
+</script>
