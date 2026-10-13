@@ -2,6 +2,36 @@
 
 An interactive force-directed graph of James Joyce's *Ulysses* — episodes, characters, themes, and places, built with React, D3, and Vite.
 
+## At a glance
+
+| | Core layers | With the Passages layer |
+|---|---:|---:|
+| Nodes | 228 | 324 (+96 passages) |
+| Links (intersections) | 1,651 | 2,491 |
+
+841 of the links are derived co-occurrences (two ideas sharing passages). The corpus behind them is 118 text blocks: 96 Joyce quotes, 15 analyses and 7 commentary notes.
+
+| Most connected | Links | | Motifs that travel together | Shared passages |
+|---|---:|---|---|---:|
+| Circe (episode 15) | 111 | | Eyes & gaze × Hands & fingers | 12 |
+| Hands & fingers (motif) | 74 | | Hands & fingers × Voice & song | 11 |
+| Black & dark (motif) | 65 | | Hands & fingers × Lips, mouth & breath | 10 |
+| Sirens (episode 11) | 63 | | | |
+| Stephen Dedalus | 62 | | | |
+
+**Style.** Paper and ink, shared with the Quote Atlas: warm paper ground, near-black ink, five muted hue families. Color says the family, shape says the type, and selection has three tiers with no glow or animation. Light, dark and system themes. Full rules in [STYLE-GUIDE.md](STYLE-GUIDE.md).
+
+**What makes it work.**
+
+- Every link traces to exact source lines in the notes (block IDs like `e15q07`, line ranges like `L847–863`).
+- Motifs such as hands, eyes, music and black cut across episodes that look unrelated.
+- Five layers (Core, Motifs, Structure, All, Passages) keep the graph readable.
+- Thin evidence is drawn dashed and misfiled passages are flagged and corrected.
+- Spread slider, drag-to-pin (touch too), Timeline and Radial presets, export/import of layouts.
+- Keyboard-focusable nodes, a list view, reduced-motion support and lazily loaded text.
+
+An interactive one-page version, with a live graph, a per-episode table and a motif-by-episode heatmap, is in [docs/ulysses-graph-summary-2026-10-12.html](docs/ulysses-graph-summary-2026-10-12.html).
+
 ## The graph: 228 nodes
 
 The graph is the hand-authored base (`src/data/baseData.js`, 58 nodes) plus a
